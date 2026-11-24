@@ -1,0 +1,10 @@
+{
+  "name": "Shaila",
+  "description": "Shaila (শাইলা) — Premium Bengali & English AI Voice Personal Assistant developed by Amir.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

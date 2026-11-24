@@ -1,0 +1,339 @@
+package com.example
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import com.example.data.model.AppLanguage
+import com.example.data.remote.DownloadProgressState
+import com.example.ui.components.ShailaBottomBar
+import com.example.ui.components.ShailaCosmicBackdrop
+import com.example.ui.components.ShailaRoutes
+import com.example.ui.screens.GalleryScreen
+import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.ImageRegionDebugScreen
+import com.example.ui.screens.MemoryScreen
+import com.example.ui.screens.OnboardingScreen
+import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.ToolsScreen
+import com.example.ui.theme.ShailaTheme
+import com.example.ui.viewmodel.ShailaViewModel
+import kotlinx.coroutines.launch
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            ShailaApp()
+        }
+    }
+}
+
+@Composable
+fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val imageRegions by viewModel.imageRegions.collectAsStateWithLifecycle()
+    val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val memories by viewModel.memories.collectAsStateWithLifecycle()
+    val galleryMedia by viewModel.galleryMedia.collectAsStateWithLifecycle()
+    val apiKeys by viewModel.apiKeys.collectAsStateWithLifecycle()
+    val orbState by viewModel.orbState.collectAsStateWithLifecycle()
+    val rmsLevel by viewModel.rmsLevel.collectAsStateWithLifecycle()
+    val partialTranscript by viewModel.partialTranscript.collectAsStateWithLifecycle()
+    val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
+    val activeVoiceSource by viewModel.activeVoiceSource.collectAsStateWithLifecycle()
+    val needsApiKeyBanner by viewModel.needsApiKeyBanner.collectAsStateWithLifecycle()
+    val pendingSafetyPrompt by viewModel.pendingSafetyPrompt.collectAsStateWithLifecycle()
+    val galleryState by viewModel.galleryState.collectAsStateWithLifecycle()
+    val toolState by viewModel.toolState.collectAsStateWithLifecycle()
+    val keyTestStatuses by viewModel.keyTestStatuses.collectAsStateWithLifecycle()
+    val voicePreviewStatus by viewModel.voicePreviewStatus.collectAsStateWithLifecycle()
+    val apkUpdateState by viewModel.apkUpdateState.collectAsStateWithLifecycle()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val isBn = settings.appLanguage == AppLanguage.BENGALI
+
+    ShailaTheme(
+        darkTheme = settings.darkTheme,
+        accentPreset = settings.accentPreset
+    ) {
+        if (!settings.onboardingCompleted) {
+            OnboardingScreen(
+                appLanguage = settings.appLanguage,
+                imageRegions = imageRegions,
+                apiKeys = apiKeys,
+                onSaveApiKey = viewModel::saveApiKey,
+                onAddGalleryUris = viewModel::addPickedGalleryUris,
+                onMicPermissionUpdated = viewModel::updateMicPermission,
+                onComplete = {
+                    viewModel.completeOnboarding()
+                }
+            )
+        } else {
+            val navController = rememberNavController()
+            val navBackStackEntry by navController.currentBackStackEntryAsState()
+            val currentRoute = navBackStackEntry?.destination?.route
+
+            val showBottomBar = currentRoute in listOf(
+                ShailaRoutes.HOME,
+                ShailaRoutes.GALLERY,
+                ShailaRoutes.TOOLS,
+                ShailaRoutes.SETTINGS
+            )
+
+            LaunchedEffect(settings.onboardingCompleted) {
+                viewModel.triggerStartupGreetingIfNeeded()
+            }
+
+            var lastNotifiedDownloadId by remember { mutableLongStateOf(-1L) }
+            LaunchedEffect(apkUpdateState.downloadState) {
+                when (val dlState = apkUpdateState.downloadState) {
+                    is DownloadProgressState.Downloading -> {
+                        if (dlState.downloadId != lastNotifiedDownloadId) {
+                            lastNotifiedDownloadId = dlState.downloadId
+                            snackbarHostState.showSnackbar(
+                                if (isBn) "APK ডাউনলোড শুরু হয়েছে..." else "APK download started..."
+                            )
+                        }
+                    }
+                    is DownloadProgressState.Completed -> {
+                        val action = snackbarHostState.showSnackbar(
+                            message = if (isBn) {
+                                "ডাউনলোড সম্পন্ন হয়েছে: ${dlState.fileName}"
+                            } else {
+                                "Download complete: ${dlState.fileName}"
+                            },
+                            actionLabel = if (isBn) "খুলুন" else "Open"
+                        )
+                        if (action == SnackbarResult.ActionPerformed) {
+                            viewModel.openSystemDownloads()
+                        }
+                    }
+                    is DownloadProgressState.Failed -> {
+                        snackbarHostState.showSnackbar(dlState.reason)
+                    }
+                    DownloadProgressState.Idle -> Unit
+                }
+            }
+
+            ShailaCosmicBackdrop {
+                Scaffold(
+                    containerColor = Color.Transparent,
+                    contentWindowInsets = WindowInsets.safeDrawing,
+                    snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+                    bottomBar = {
+                        if (showBottomBar) {
+                            ShailaBottomBar(
+                                currentRoute = currentRoute,
+                                appLanguage = settings.appLanguage,
+                                onNavigate = { target ->
+                                    if (target != currentRoute) {
+                                        navController.navigate(target) {
+                                            popUpTo(ShailaRoutes.HOME) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ) { innerPadding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                    ) {
+                        NavHost(
+                            navController = navController,
+                            startDestination = ShailaRoutes.HOME
+                        ) {
+                            composable(ShailaRoutes.HOME) {
+                                HomeScreen(
+                                    settings = settings,
+                                    imageRegions = imageRegions,
+                                    messages = messages,
+                                    memoryCount = memories.size,
+                                    orbState = orbState,
+                                    rmsLevel = rmsLevel,
+                                    partialTranscript = partialTranscript,
+                                    statusMessage = statusMessage,
+                                    activeVoiceSource = activeVoiceSource,
+                                    needsApiKeyBanner = needsApiKeyBanner,
+                                    pendingSafetyPrompt = pendingSafetyPrompt,
+                                    greetingText = viewModel.getCurrentGreeting(),
+                                    onUpdateMicPermission = viewModel::updateMicPermission,
+                                    onStartListening = { viewModel.startVoiceListening(null) },
+                                    onStopListening = viewModel::stopVoiceListening,
+                                    onStopSpeaking = viewModel::stopSpeaking,
+                                    onSendMessage = { text -> viewModel.submitUserMessage(text) },
+                                    onSpeakMessage = { text -> viewModel.speakOut(text) },
+                                    onSaveToMemory = { text ->
+                                        viewModel.addMemory(text, if (isBn) "চ্যাট থেকে" else "From Chat")
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                if (isBn) "স্মৃতিতে সংরক্ষিত হয়েছে" else "Saved to Memory"
+                                            )
+                                        }
+                                    },
+                                    onToggleHoldToTalk = viewModel::setHoldToTalkMode,
+                                    onToggleLanguage = viewModel::setAppLanguage,
+                                    onConfirmSafety = viewModel::confirmSafetyPrompt,
+                                    onDismissSafety = viewModel::dismissSafetyPrompt,
+                                    onOpenMemory = { navController.navigate(ShailaRoutes.MEMORY) },
+                                    onOpenSettings = {
+                                        navController.navigate(ShailaRoutes.SETTINGS) {
+                                            popUpTo(ShailaRoutes.HOME) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    },
+                                    onDismissStatus = viewModel::clearStatusMessage
+                                )
+                            }
+
+                            composable(ShailaRoutes.GALLERY) {
+                                GalleryScreen(
+                                    appLanguage = settings.appLanguage,
+                                    mediaItems = galleryMedia,
+                                    galleryState = galleryState,
+                                    orbState = orbState,
+                                    partialTranscript = partialTranscript,
+                                    frameExtractor = viewModel.frameExtractor,
+                                    onAddUris = viewModel::addPickedGalleryUris,
+                                    onRemoveItem = viewModel::removeGalleryItem,
+                                    onSelectItem = viewModel::selectGalleryItem,
+                                    onClearSelection = viewModel::clearSelectedGalleryItem,
+                                    onAnalyzeMedia = viewModel::analyzeSelectedGalleryMedia,
+                                    onStartVoiceForGallery = { item -> viewModel.startVoiceListening(item) },
+                                    onStopVoice = viewModel::stopVoiceListening,
+                                    onSpeakText = { text -> viewModel.speakOut(text) },
+                                    onOpenSettings = {
+                                        navController.navigate(ShailaRoutes.SETTINGS) {
+                                            popUpTo(ShailaRoutes.HOME) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    }
+                                )
+                            }
+
+                            composable(ShailaRoutes.TOOLS) {
+                                ToolsScreen(
+                                    appLanguage = settings.appLanguage,
+                                    toolState = toolState,
+                                    onGenerate = viewModel::generateToolOutput,
+                                    onResetToolState = viewModel::resetToolState,
+                                    onSpeakText = { text -> viewModel.speakOut(text) },
+                                    onOpenSettings = {
+                                        navController.navigate(ShailaRoutes.SETTINGS) {
+                                            popUpTo(ShailaRoutes.HOME) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    }
+                                )
+                            }
+
+                            composable(ShailaRoutes.SETTINGS) {
+                                SettingsScreen(
+                                    settings = settings,
+                                    imageRegions = imageRegions,
+                                    apiKeys = apiKeys,
+                                    keyTestStatuses = keyTestStatuses,
+                                    voicePreviewStatus = voicePreviewStatus,
+                                    onSaveApiKey = viewModel::saveApiKey,
+                                    onTestApiKey = viewModel::testApiKey,
+                                    onSelectClaudeModel = viewModel::setClaudeModel,
+                                    onSelectVoiceProvider = viewModel::setVoiceProvider,
+                                    onSelectVoice = viewModel::setVoiceForProvider,
+                                    onPreviewVoice = viewModel::previewVoice,
+                                    onChangeVoiceSpeed = viewModel::setVoiceSpeed,
+                                    onChangeStability = viewModel::setElevenLabsStability,
+                                    onChangeStyle = viewModel::setElevenLabsStyle,
+                                    onSelectAppLanguage = viewModel::setAppLanguage,
+                                    onSelectSpeechLanguage = viewModel::setSpeechLanguage,
+                                    onToggleContinuous = viewModel::setContinuousConversation,
+                                    onToggleAutoSpeak = viewModel::setAutoSpeakReplies,
+                                    onToggleHoldToTalk = viewModel::setHoldToTalkMode,
+                                    onToggleDarkTheme = viewModel::setDarkTheme,
+                                    onSelectAccent = viewModel::setAccentPreset,
+                                    onOpenMemory = { navController.navigate(ShailaRoutes.MEMORY) },
+                                    onOpenImageRegionDebug = { navController.navigate(ShailaRoutes.IMAGE_REGION_DEBUG) },
+                                    onClearChat = {
+                                        viewModel.clearChatHistory()
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                if (isBn) "চ্যাট ইতিহাস মুছে ফেলা হয়েছে" else "Chat history cleared"
+                                            )
+                                        }
+                                    },
+                                    onClearMemories = {
+                                        viewModel.clearAllMemories()
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                if (isBn) "সব স্মৃতি মুছে ফেলা হয়েছে" else "All memories cleared"
+                                            )
+                                        }
+                                    },
+                                    apkUpdateState = apkUpdateState,
+                                    onSaveApkUpdateUrl = viewModel::setApkUpdateUrl,
+                                    onCheckLatestBuild = viewModel::checkLatestBuild,
+                                    onDownloadApk = viewModel::startApkDownload,
+                                    onCancelApkDownload = viewModel::cancelApkDownload,
+                                    onOpenDownloads = viewModel::openSystemDownloads
+                                )
+                            }
+
+                            composable(ShailaRoutes.MEMORY) {
+                                MemoryScreen(
+                                    appLanguage = settings.appLanguage,
+                                    memories = memories,
+                                    onAddMemory = viewModel::addMemory,
+                                    onDeleteMemory = viewModel::deleteMemory,
+                                    onClearAll = viewModel::clearAllMemories,
+                                    onBack = { navController.popBackStack() }
+                                )
+                            }
+
+                            composable(ShailaRoutes.IMAGE_REGION_DEBUG) {
+                                ImageRegionDebugScreen(
+                                    regions = imageRegions,
+                                    onUpdateRegion = viewModel::updateImageRegion,
+                                    onResetAll = viewModel::resetImageRegions,
+                                    onBack = { navController.popBackStack() }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

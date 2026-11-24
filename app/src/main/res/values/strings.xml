@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Shaila</string>
+    <string name="app_display_name_bn">শাইলা</string>
+    <string name="nav_home">হোম</string>
+    <string name="nav_gallery">গ্যালারি</string>
+    <string name="nav_tools">টুলস</string>
+    <string name="nav_settings">সেটিংস</string>
+    <string name="developed_by">Developed by Amir (আমির)</string>
+    <string name="cd_orb">শাইলার ভয়েস অর্ব</string>
+    <string name="cd_mic_button">কথা বলতে ট্যাপ করুন বা চেপে ধরুন</string>
+    <string name="cd_send_message">বার্তা পাঠান</string>
+    <string name="cd_memory_page">স্মৃতি পরিচালনা</string>
+</resources>
