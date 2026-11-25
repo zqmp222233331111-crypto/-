@@ -253,4 +253,28 @@ class ExampleUnitTest {
         assertEquals(com.example.data.device.PhoneAction.SystemNav("back"), actions[5])
         assertEquals(com.example.data.device.PhoneAction.OpenUrl("https://example.com"), actions[6])
     }
+
+    @Test
+    fun `fallback phone command parser detects Bengali app open search type and hardware commands`() {
+        val ytSearch = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt(
+            "ইউটিউব খুলে বাংলা রোমান্টিক গান লিখে সার্চ করো"
+        )
+        assertTrue(ytSearch.contains(com.example.data.device.PhoneAction.OpenApp("youtube")))
+        assertTrue(ytSearch.contains(com.example.data.device.PhoneAction.TypeText("বাংলা রোমান্টিক গান")))
+        assertTrue(ytSearch.contains(com.example.data.device.PhoneAction.Submit))
+
+        val torchOn = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt("টর্চ জ্বালাও")
+        assertEquals(listOf(com.example.data.device.PhoneAction.Flashlight(true)), torchOn)
+
+        val dial = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt("01712345678 নম্বরে কল দাও")
+        assertEquals(listOf(com.example.data.device.PhoneAction.Dial("01712345678")), dial)
+
+        val prompt = ClaudeApiService().buildAssistantSystemPrompt(
+            memories = emptyList(),
+            preferredLanguage = AppLanguage.BENGALI,
+            spokenStyle = true
+        )
+        assertTrue(prompt.contains("NEVER sound like a robotic AI"))
+        assertTrue(prompt.contains("LOYALTY & USER RETENTION"))
+    }
 }

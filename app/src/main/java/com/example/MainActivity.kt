@@ -263,7 +263,9 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
                                                 restoreState = true
                                             }
                                         },
-                                        onDismissStatus = viewModel::clearStatusMessage
+                                        onDismissStatus = viewModel::clearStatusMessage,
+                                        isAccessibilityEnabled = isAccessibilityEnabled,
+                                        onOpenAccessibilitySettings = viewModel::openAccessibilitySettings
                                     )
                                 }
 

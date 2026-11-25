@@ -147,7 +147,9 @@ fun HomeScreen(
     onDismissSafety: () -> Unit,
     onOpenMemory: () -> Unit,
     onOpenSettings: () -> Unit,
-    onDismissStatus: () -> Unit
+    onDismissStatus: () -> Unit,
+    isAccessibilityEnabled: Boolean = true,
+    onOpenAccessibilitySettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -261,6 +263,21 @@ fun HomeScreen(
                         onClick = {
                             showMenuDropdown = false
                             onToggleLanguage(if (isBn) AppLanguage.ENGLISH else AppLanguage.BENGALI)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (isAccessibilityEnabled) {
+                                    if (isBn) "ফোন কন্ট্রোল: চালু ✓" else "Phone Control: Active ✓"
+                                } else {
+                                    if (isBn) "ফোন ও টাইপিং কন্ট্রোল চালু করুন" else "Enable Phone & Typing Control"
+                                }
+                            )
+                        },
+                        onClick = {
+                            showMenuDropdown = false
+                            onOpenAccessibilitySettings()
                         }
                     )
                     DropdownMenuItem(
@@ -706,6 +723,24 @@ fun HomeScreen(
                             AssistChip(
                                 onClick = { onSendMessage(chipText) },
                                 label = { Text(chipText, style = MaterialTheme.typography.labelMedium) }
+                            )
+                        }
+                    }
+                    if (!isAccessibilityEnabled) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onOpenAccessibilitySettings,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("home_enable_phone_control_button")
+                        ) {
+                            Text(
+                                text = if (isBn) {
+                                    "যেকোনো অ্যাপে টাইপ ও কন্ট্রোলের জন্য চালু করুন →"
+                                } else {
+                                    "Enable Phone & Typing Control →"
+                                },
+                                style = MaterialTheme.typography.labelMedium
                             )
                         }
                     }

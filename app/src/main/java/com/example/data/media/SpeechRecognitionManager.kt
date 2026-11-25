@@ -112,6 +112,8 @@ class SpeechRecognitionManager(private val context: Context) {
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, primaryLocale)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, primaryLocale)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 600L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 480L)
             if (speechLanguage == SpeechLanguage.AUTO) {
                 putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("bn-BD", "en-US"))
             }

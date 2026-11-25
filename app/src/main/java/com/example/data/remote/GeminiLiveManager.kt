@@ -253,6 +253,40 @@ class GeminiLiveManager(
                     properties = JSONObject()
                 )
             )
+            put(
+                decl(
+                    name = "dial_number",
+                    description = "Opens the phone dialer with the requested phone number ready to call.",
+                    properties = JSONObject().put(
+                        "phone_number",
+                        JSONObject().put("type", "STRING").put("description", "Phone number digits")
+                    ),
+                    required = listOf("phone_number")
+                )
+            )
+            put(
+                decl(
+                    name = "flashlight",
+                    description = "Turns the phone flashlight torch on or off.",
+                    properties = JSONObject().put(
+                        "turn_on",
+                        JSONObject().put("type", "BOOLEAN").put("description", "true to turn on, false to turn off")
+                    ),
+                    required = listOf("turn_on")
+                )
+            )
+            put(
+                decl(
+                    name = "set_alarm",
+                    description = "Sets an alarm on the user's phone at a specified hour and minute.",
+                    properties = JSONObject().apply {
+                        put("hour", JSONObject().put("type", "INTEGER").put("description", "Hour in 24h format (0-23)"))
+                        put("minute", JSONObject().put("type", "INTEGER").put("description", "Minute (0-59)"))
+                        put("label", JSONObject().put("type", "STRING").put("description", "Optional alarm label"))
+                    },
+                    required = listOf("hour", "minute")
+                )
+            )
         }
         return JSONArray().put(JSONObject().put("functionDeclarations", declarations))
     }
@@ -266,7 +300,8 @@ class GeminiLiveManager(
         systemPrompt: String,
         language: AppLanguage,
         onTranscriptTurn: (String, String) -> Unit,
-        onToolCall: suspend (String, JSONObject) -> JSONObject
+        onToolCall: suspend (String, JSONObject) -> JSONObject,
+        useLowLatencyExtras: Boolean = true
     ) {
         if (manualStopRequested) return
 
@@ -287,6 +322,9 @@ class GeminiLiveManager(
                                 "generationConfig",
                                 JSONObject().apply {
                                     put("responseModalities", JSONArray().put("AUDIO"))
+                                    if (useLowLatencyExtras && initialModel.contains("2.5")) {
+                                        put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+                                    }
                                     put(
                                         "speechConfig",
                                         JSONObject().apply {
@@ -303,6 +341,21 @@ class GeminiLiveManager(
                                     )
                                 }
                             )
+                            if (useLowLatencyExtras) {
+                                put(
+                                    "realtimeInputConfig",
+                                    JSONObject().put(
+                                        "automaticActivityDetection",
+                                        JSONObject().apply {
+                                            put("disabled", false)
+                                            put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
+                                            put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
+                                            put("prefixPaddingMs", 60)
+                                            put("silenceDurationMs", 260)
+                                        }
+                                    )
+                                )
+                            }
                             put(
                                 "systemInstruction",
                                 JSONObject().put(
@@ -345,7 +398,20 @@ class GeminiLiveManager(
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
                 ws.close(1000, null)
-                if (!setupComplete && !manualStopRequested && modelIndex + 1 < candidateModels.size) {
+                if (!setupComplete && !manualStopRequested && useLowLatencyExtras) {
+                    openWebSocket(
+                        apiKey = apiKey,
+                        candidateModels = candidateModels,
+                        modelIndex = modelIndex,
+                        initialModel = initialModel,
+                        voice = voice,
+                        systemPrompt = systemPrompt,
+                        language = language,
+                        onTranscriptTurn = onTranscriptTurn,
+                        onToolCall = onToolCall,
+                        useLowLatencyExtras = false
+                    )
+                } else if (!setupComplete && !manualStopRequested && modelIndex + 1 < candidateModels.size) {
                     val nextModel = candidateModels[modelIndex + 1]
                     openWebSocket(
                         apiKey = apiKey,
@@ -356,7 +422,8 @@ class GeminiLiveManager(
                         systemPrompt = systemPrompt,
                         language = language,
                         onTranscriptTurn = onTranscriptTurn,
-                        onToolCall = onToolCall
+                        onToolCall = onToolCall,
+                        useLowLatencyExtras = true
                     )
                 } else if (!manualStopRequested && _sessionState.value.status != LiveCallStatus.ERROR) {
                     stopAudioHardware()
@@ -372,6 +439,21 @@ class GeminiLiveManager(
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 if (manualStopRequested) return
+                if (!setupComplete && useLowLatencyExtras) {
+                    openWebSocket(
+                        apiKey = apiKey,
+                        candidateModels = candidateModels,
+                        modelIndex = modelIndex,
+                        initialModel = initialModel,
+                        voice = voice,
+                        systemPrompt = systemPrompt,
+                        language = language,
+                        onTranscriptTurn = onTranscriptTurn,
+                        onToolCall = onToolCall,
+                        useLowLatencyExtras = false
+                    )
+                    return
+                }
                 if (!setupComplete && modelIndex + 1 < candidateModels.size) {
                     val nextModel = candidateModels[modelIndex + 1]
                     openWebSocket(
@@ -383,7 +465,8 @@ class GeminiLiveManager(
                         systemPrompt = systemPrompt,
                         language = language,
                         onTranscriptTurn = onTranscriptTurn,
-                        onToolCall = onToolCall
+                        onToolCall = onToolCall,
+                        useLowLatencyExtras = true
                     )
                     return
                 }
@@ -628,7 +711,7 @@ class GeminiLiveManager(
 
         synchronized(audioWriteLock) {
             runCatching { audioTrack?.release() }
-            audioTrack = AudioTrack.Builder()
+            val builder = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(
@@ -645,13 +728,15 @@ class GeminiLiveManager(
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .build()
                 )
-                .setBufferSizeInBytes(minBuf * 2)
+                .setBufferSizeInBytes(minBuf)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
-                .apply {
-                    setVolume(AudioTrack.getMaxVolume())
-                    play()
-                }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            }
+            audioTrack = builder.build().apply {
+                setVolume(AudioTrack.getMaxVolume())
+                play()
+            }
         }
     }
 
@@ -737,7 +822,7 @@ class GeminiLiveManager(
                 }.getOrNull()
             }
 
-            val buffer = ByteArray(1600) // ~50ms chunks at 16kHz 16-bit mono
+            val buffer = ByteArray(640) // 20ms low-latency chunks at 16kHz 16-bit mono
             runCatching { recorder.startRecording() }
 
             while (isActive && !manualStopRequested) {

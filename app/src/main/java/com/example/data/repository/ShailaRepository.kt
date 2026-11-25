@@ -119,10 +119,11 @@ class ShailaRepository(
         return """
             $base
 
-            LIVE VOICE CALL MODE:
-            - You are currently in a live real-time voice phone call with the user.
-            - Respond warmly, naturally, and concisely (1-3 spoken sentences at a time) without bullet points or formatting.
-            - Use natural conversational emotion suitable for a friendly female companion assistant.
+            LIVE VOICE CALL MODE (ULTRA-FAST HUMAN RESPONSE):
+            - You are in a live real-time phone call with someone close to you.
+            - Start answering the instant the user finishes speaking—zero filler openings, zero robotic hesitation, zero AI disclaimers.
+            - Give clear, accurate, well-organized answers in 1 to 3 natural spoken sentences.
+            - Use your phone-control function tools IMMEDIATELY whenever the user asks to open an app, type, tap, scroll, search, dial, set an alarm, or toggle flashlight—never just say you opened an app without actually invoking the tool.
         """.trimIndent()
     }
 
@@ -216,13 +217,18 @@ class ShailaRepository(
                 else -> throw ShailaAiException.MissingApiKey()
             }
 
-            val (cleanReplyText, actions) = PhoneActionParser.parseActionTags(replyText)
+            val (cleanReplyText, parsedActions) = PhoneActionParser.parseActionTags(replyText)
+            val resolvedActions = if (parsedActions.isNotEmpty()) {
+                parsedActions
+            } else {
+                PhoneActionParser.inferFallbackActionsFromUserPrompt(userText)
+            }
             val saved = ChatMessage(
                 role = SenderRole.ASSISTANT,
                 text = cleanReplyText.ifBlank { replyText }
             )
             val rowId = database.chatDao().insertMessage(saved)
-            Result.success(AssistantTurnResult(saved.copy(id = rowId), actions))
+            Result.success(AssistantTurnResult(saved.copy(id = rowId), resolvedActions))
         } catch (e: ShailaAiException) {
             Result.failure(e)
         } catch (e: Exception) {

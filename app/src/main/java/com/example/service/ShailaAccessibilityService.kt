@@ -2,15 +2,21 @@ package com.example.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 
 data class AccessibilityActionOutcome(
     val success: Boolean,
@@ -92,6 +98,41 @@ class ShailaAccessibilityService : AccessibilityService() {
         }
     }
 
+    fun currentForegroundPackage(): String? = rootInActiveWindow?.packageName?.toString()
+
+    suspend fun typeTextSmart(
+        text: String,
+        append: Boolean = false,
+        submitAfter: Boolean = false
+    ): AccessibilityActionOutcome {
+        val firstAttempt = withContext(Dispatchers.Main) {
+            typeText(text = text, append = append, submitAfter = submitAfter)
+        }
+        if (firstAttempt.success) return firstAttempt
+
+        // If no editable text box is currently open, try tapping a Search / Message entry point first
+        val openedInput = withContext(Dispatchers.Main) {
+            val triggerLabels = listOf(
+                "search youtube",
+                "search or type web address",
+                "search",
+                "সার্চ",
+                "type a message",
+                "message",
+                "write a message"
+            )
+            triggerLabels.any { lbl -> tapByLabel(lbl).success }
+        }
+        if (!openedInput) {
+            return firstAttempt
+        }
+
+        delay(550)
+        return withContext(Dispatchers.Main) {
+            typeText(text = text, append = append, submitAfter = submitAfter)
+        }
+    }
+
     fun typeText(
         text: String,
         append: Boolean = false,
@@ -157,9 +198,17 @@ class ShailaAccessibilityService : AccessibilityService() {
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, finalValue)
         }
-        val setOk = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        var setOk = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
-        if (submitAfter) {
+        if (!setOk) {
+            setOk = runCatching {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("Shaila", finalValue))
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            }.getOrDefault(false)
+        }
+
+        if (setOk && submitAfter) {
             pressEnterOrSubmit(targetNode)
         }
 

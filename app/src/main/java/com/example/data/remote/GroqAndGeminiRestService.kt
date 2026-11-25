@@ -138,6 +138,14 @@ class GroqAndGeminiRestService {
                 JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt)))
             )
             put("contents", contents)
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("temperature", 0.65)
+                    put("maxOutputTokens", 500)
+                    put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+                }
+            )
         }
 
         val req = Request.Builder()
