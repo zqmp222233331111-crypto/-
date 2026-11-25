@@ -128,15 +128,20 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun `api keys snapshot parses comma separated groq keys and checks brain availability`() {
+    fun `api keys snapshot parses comma separated groq keys and checks brain and voice availability`() {
         val snapshot = com.example.data.local.ApiKeysSnapshot(
             groqKey = "gsk_first, gsk_second;\ngsk_third"
         )
         assertEquals(listOf("gsk_first", "gsk_second", "gsk_third"), snapshot.groqKeysList())
         assertTrue(snapshot.hasAnyChatBrainKey())
+        assertEquals(false, snapshot.hasAnyVoiceApiKey())
+
+        assertTrue(com.example.data.local.ApiKeysSnapshot(geminiKey = "AIzaTest").hasAnyVoiceApiKey())
+        assertTrue(com.example.data.local.ApiKeysSnapshot(elevenLabsKey = "xi-test").hasAnyVoiceApiKey())
 
         val empty = com.example.data.local.ApiKeysSnapshot()
         assertEquals(false, empty.hasAnyChatBrainKey())
+        assertEquals(false, empty.hasAnyVoiceApiKey())
     }
 
     @Test
@@ -190,5 +195,62 @@ class ExampleUnitTest {
         assertTrue(prompt.contains("Speak gently with poetic Bengali warmth."))
         assertTrue(prompt.contains("1-2 natural sentences"))
         assertTrue(prompt.contains("Amir"))
+    }
+
+    @Test
+    fun `pcm audio processor amplifies quiet speech safely and builds valid wav header`() {
+        // Create 4 samples of quiet 16-bit PCM: +4000, -4000, +25000 (near peak), -25000
+        val buf = java.nio.ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        buf.putShort(4000)
+        buf.putShort(-4000)
+        buf.putShort(25000)
+        buf.putShort(-25000)
+        val input = buf.array()
+
+        val boosted = com.example.data.remote.PcmAudioProcessor.applySoftGain(input, gain = 2.0f)
+        val outBuf = java.nio.ByteBuffer.wrap(boosted).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        // Quiet sample should be doubled cleanly without clipping
+        assertTrue(outBuf.getShort(0) in 7900..8100)
+        assertTrue(outBuf.getShort(2) in -8100..-7900)
+        // Peak sample should stay soft-limited within Short range without wrapping
+        assertTrue(outBuf.getShort(4) in 25000..Short.MAX_VALUE)
+        assertTrue(outBuf.getShort(6) in Short.MIN_VALUE..-25000)
+
+        assertTrue(com.example.data.remote.PcmAudioProcessor.computePcm16RmsNormalized(boosted) > 0.5f)
+        assertEquals(
+            24000,
+            com.example.data.remote.PcmAudioProcessor.parseSampleRateFromMime("audio/L16;codec=pcm;rate=24000")
+        )
+
+        val wav = com.example.data.remote.PcmAudioProcessor.wrapPcm16AsWav(boosted, sampleRate = 24000)
+        assertEquals(44 + boosted.size, wav.size)
+        assertEquals("RIFF", String(wav, 0, 4))
+        assertEquals("WAVE", String(wav, 8, 4))
+        assertEquals("data", String(wav, 36, 4))
+    }
+
+    @Test
+    fun `phone action parser extracts all actions and strips tags from spoken reply`() {
+        val raw = """
+            ঠিক আছে, ইউটিউব খুলে বাংলা গান লিখে দিচ্ছি।
+            [[ACTION:OPEN_APP|YouTube]]
+            [[ACTION:TAP_TEXT|Search]]
+            [[ACTION:TYPE_TEXT|বাংলা রোমান্টিক গান]]
+            [[ACTION:SUBMIT]]
+            [[ACTION:SCROLL|down]]
+            [[ACTION:GLOBAL|back]]
+            [[ACTION:OPEN_URL|https://example.com]]
+        """.trimIndent()
+
+        val (cleanText, actions) = com.example.data.device.PhoneActionParser.parseActionTags(raw)
+        assertEquals("ঠিক আছে, ইউটিউব খুলে বাংলা গান লিখে দিচ্ছি।", cleanText)
+        assertEquals(7, actions.size)
+        assertEquals(com.example.data.device.PhoneAction.OpenApp("YouTube"), actions[0])
+        assertEquals(com.example.data.device.PhoneAction.TapText("Search"), actions[1])
+        assertEquals(com.example.data.device.PhoneAction.TypeText("বাংলা রোমান্টিক গান"), actions[2])
+        assertEquals(com.example.data.device.PhoneAction.Submit, actions[3])
+        assertEquals(com.example.data.device.PhoneAction.Scroll("down"), actions[4])
+        assertEquals(com.example.data.device.PhoneAction.SystemNav("back"), actions[5])
+        assertEquals(com.example.data.device.PhoneAction.OpenUrl("https://example.com"), actions[6])
     }
 }

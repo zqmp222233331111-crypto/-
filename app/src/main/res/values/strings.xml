@@ -10,4 +10,6 @@
     <string name="cd_mic_button">কথা বলতে ট্যাপ করুন বা চেপে ধরুন</string>
     <string name="cd_send_message">বার্তা পাঠান</string>
     <string name="cd_memory_page">স্মৃতি পরিচালনা</string>
+    <string name="accessibility_service_label">Shaila (শাইলা) ফোন কন্ট্রোল</string>
+    <string name="accessibility_service_description">আপনার ভয়েস বা লিখিত নির্দেশে শাইলাকে যেকোনো অ্যাপে টাইপ করা, বাটনে ট্যাপ করা, স্ক্রল করা এবং ব্যাক/হোম নেভিগেশন করতে দেয়।</string>
 </resources>

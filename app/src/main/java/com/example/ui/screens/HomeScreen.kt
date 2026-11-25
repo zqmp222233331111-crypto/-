@@ -536,7 +536,7 @@ fun HomeScreen(
 
             if (activeVoiceSource != null && orbState == OrbState.IDLE) {
                 Text(
-                    text = "${settings.voiceProvider.titleEn} • $activeVoiceSource",
+                    text = if (isBn) "কণ্ঠ: $activeVoiceSource" else "Voice: $activeVoiceSource",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.secondary
                 )

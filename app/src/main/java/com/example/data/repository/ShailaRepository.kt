@@ -3,6 +3,8 @@ package com.example.data.repository
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.example.data.device.PhoneAction
+import com.example.data.device.PhoneActionParser
 import com.example.data.local.ApiKeyType
 import com.example.data.local.ApiKeysSnapshot
 import com.example.data.local.SecureStorageManager
@@ -38,6 +40,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import java.util.Calendar
+
+data class AssistantTurnResult(
+    val message: ChatMessage,
+    val actions: List<PhoneAction> = emptyList()
+)
 
 class ShailaRepository(
     private val context: Context,
@@ -97,37 +104,6 @@ class ShailaRepository(
         return creatorQueries.any { lower.contains(it) }
     }
 
-    fun localIdentityReply(
-        text: String,
-        language: AppLanguage,
-        assistantName: String = "Shaila"
-    ): String {
-        val cleanName = assistantName.trim().ifBlank { "Shaila" }
-        val isDefaultShaila = cleanName.equals("Shaila", ignoreCase = true) || cleanName == "শাইলা"
-        val bnName = if (isDefaultShaila) "শাইলা" else cleanName
-        val enName = if (isDefaultShaila) "Shaila" else cleanName
-        val lower = text.lowercase()
-        val asksCreator = lower.contains("বানিয়ে") || lower.contains("নির্মাতা") ||
-            lower.contains("ডেভেলপার") || lower.contains("made") ||
-            lower.contains("created") || lower.contains("developer") || lower.contains("built")
-        val isEnglish = text.none { it in '\u0980'..'\u09FF' } &&
-            (language == AppLanguage.ENGLISH || lower.contains("who") || lower.contains("what"))
-
-        return if (asksCreator) {
-            if (isEnglish) {
-                "I'm $enName. I was created by Amir, he is my developer."
-            } else {
-                "আমি $bnName। আমাকে বানিয়েছেন আমির, উনিই আমার ডেভেলপার।"
-            }
-        } else {
-            if (isEnglish) {
-                "My name is $enName, your personal AI assistant created by Amir."
-            } else {
-                "আমার নাম $bnName। আমি আপনার ব্যক্তিগত এআই সহকারী, আমাকে বানিয়েছেন আমির।"
-            }
-        }
-    }
-
     suspend fun buildLiveSystemPrompt(): String {
         val settings = settingsFlow.first()
         val memories = database.memoryDao().getAllMemories()
@@ -165,7 +141,7 @@ class ShailaRepository(
         userText: String,
         mediaUri: Uri? = null,
         isVideo: Boolean = false
-    ): Result<ChatMessage> {
+    ): Result<AssistantTurnResult> {
         val settings = settingsFlow.first()
         val keys = secureStorage.keysState.value
         val claudeKey = keys.claudeKey.ifBlank { secureStorage.getKey(ApiKeyType.CLAUDE) }
@@ -179,13 +155,6 @@ class ShailaRepository(
             isVideo = isVideo
         )
         database.chatDao().insertMessage(userMsg)
-
-        if (claudeKey.isBlank() && groqKeys.isEmpty() && geminiKey.isBlank() && isIdentityQuestion(userText)) {
-            val reply = localIdentityReply(userText, settings.appLanguage, settings.assistantName)
-            val saved = ChatMessage(role = SenderRole.ASSISTANT, text = reply)
-            database.chatDao().insertMessage(saved)
-            return Result.success(saved)
-        }
 
         return try {
             val memories = database.memoryDao().getAllMemories()
@@ -247,9 +216,13 @@ class ShailaRepository(
                 else -> throw ShailaAiException.MissingApiKey()
             }
 
-            val saved = ChatMessage(role = SenderRole.ASSISTANT, text = replyText)
+            val (cleanReplyText, actions) = PhoneActionParser.parseActionTags(replyText)
+            val saved = ChatMessage(
+                role = SenderRole.ASSISTANT,
+                text = cleanReplyText.ifBlank { replyText }
+            )
             val rowId = database.chatDao().insertMessage(saved)
-            Result.success(saved.copy(id = rowId))
+            Result.success(AssistantTurnResult(saved.copy(id = rowId), actions))
         } catch (e: ShailaAiException) {
             Result.failure(e)
         } catch (e: Exception) {

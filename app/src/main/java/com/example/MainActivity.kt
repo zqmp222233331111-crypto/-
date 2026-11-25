@@ -1,5 +1,6 @@
 package com.example
 
+import android.media.AudioManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,11 +11,16 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -24,6 +30,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -52,6 +61,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        volumeControlStream = AudioManager.STREAM_MUSIC
         enableEdgeToEdge()
         setContent {
             ShailaApp()
@@ -83,6 +93,19 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
     val voicePreviewStatus by viewModel.voicePreviewStatus.collectAsStateWithLifecycle()
     val isLoadingElevenVoices by viewModel.isLoadingElevenVoices.collectAsStateWithLifecycle()
     val apkUpdateState by viewModel.apkUpdateState.collectAsStateWithLifecycle()
+    val isAccessibilityEnabled by viewModel.isAccessibilityEnabled.collectAsStateWithLifecycle()
+    val needsAccessibilityDialog by viewModel.needsAccessibilityDialog.collectAsStateWithLifecycle()
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshAccessibilityStatus()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -347,7 +370,9 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
                                     onSelectHomeCharacterStyle = viewModel::setHomeCharacterStyle,
                                     onSelectCustomCharacterUri = viewModel::setCustomCharacterUri,
                                     onToggleShowHerEverywhere = viewModel::setShowHerEverywhere,
-                                    onToggleReduceMotion = viewModel::setReduceMotion
+                                    onToggleReduceMotion = viewModel::setReduceMotion,
+                                    isAccessibilityEnabled = isAccessibilityEnabled,
+                                    onOpenAccessibilitySettings = viewModel::openAccessibilitySettings
                                 )
                             }
 
@@ -384,6 +409,7 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
                         speakingLevel = speakingLevel,
                         micLevel = liveMicLevel,
                         onToggleMute = viewModel::toggleLiveMute,
+                        onToggleSpeaker = viewModel::toggleLiveSpeaker,
                         onMinimize = { viewModel.setLiveMinimized(true) },
                         onEndCall = viewModel::endLiveCall,
                         onRetry = viewModel::startLiveCall,
@@ -394,6 +420,40 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
                                 popUpTo(ShailaRoutes.HOME) { saveState = true }
                                 launchSingleTop = true
                                 restoreState = true
+                            }
+                        }
+                    )
+                }
+
+                if (needsAccessibilityDialog) {
+                    AlertDialog(
+                        onDismissRequest = viewModel::dismissAccessibilityDialog,
+                        title = {
+                            Text(
+                                if (isBn) {
+                                    "ফোন ও টাইপিং কন্ট্রোল চালু করুন"
+                                } else {
+                                    "Enable Phone & Typing Control"
+                                }
+                            )
+                        },
+                        text = {
+                            Text(
+                                if (isBn) {
+                                    "যেকোনো অ্যাপের ভিতরে টাইপ করা, সার্চ করা, বাটনে ট্যাপ বা স্ক্রল করতে একবার Android Settings → Accessibility → \"Shaila (শাইলা) ফোন কন্ট্রোল\" চালু করে দিন।"
+                                } else {
+                                    "To let Shaila type in keyboards, tap buttons, and scroll inside any app, turn on \"Shaila Phone Control\" in Android Accessibility Settings."
+                                }
+                            )
+                        },
+                        confirmButton = {
+                            Button(onClick = viewModel::openAccessibilitySettings) {
+                                Text(if (isBn) "সেটিংসে চালু করুন" else "Open Settings")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = viewModel::dismissAccessibilityDialog) {
+                                Text(if (isBn) "পরে" else "Later")
                             }
                         }
                     )

@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
@@ -167,7 +168,9 @@ fun SettingsScreen(
     onSelectHomeCharacterStyle: (HomeCharacterStyle) -> Unit = {},
     onSelectCustomCharacterUri: (String) -> Unit = {},
     onToggleShowHerEverywhere: (Boolean) -> Unit = {},
-    onToggleReduceMotion: (Boolean) -> Unit = {}
+    onToggleReduceMotion: (Boolean) -> Unit = {},
+    isAccessibilityEnabled: Boolean = false,
+    onOpenAccessibilitySettings: () -> Unit = {}
 ) {
     val isBn = settings.appLanguage == AppLanguage.BENGALI
     val ext = LocalShailaColors.current
@@ -595,7 +598,25 @@ fun SettingsScreen(
 
                 HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 6.dp))
 
-                // 8. Memory
+                // 8. Phone & App Control (Accessibility)
+                SettingsMenuRow(
+                    icon = Icons.Filled.TouchApp,
+                    iconBg1 = if (isAccessibilityEnabled) Color(0xFF10B981) else Color(0xFFF59E0B),
+                    iconBg2 = if (isAccessibilityEnabled) Color(0xFF059669) else Color(0xFFEF4444),
+                    title = if (isBn) "ফোন ও অ্যাপ কন্ট্রোল (Accessibility)" else "Phone & App Control",
+                    subtitle = if (isAccessibilityEnabled) {
+                        if (isBn) "চালু আছে • যেকোনো অ্যাপে টাইপ, ট্যাপ ও কাজ করবে" else "Enabled • Can type, tap & control any app"
+                    } else {
+                        if (isBn) "বন্ধ আছে • অ্যাপের ভিতরে টাইপ ও বাটন ট্যাপ করতে চালু করুন" else "Tap to enable Accessibility for typing & tapping inside apps"
+                    },
+                    expanded = false,
+                    onClick = onOpenAccessibilitySettings,
+                    modifier = Modifier.testTag("phone_control_accessibility_row")
+                )
+
+                HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 6.dp))
+
+                // 9. Memory
                 SettingsMenuRow(
                     icon = Icons.Filled.Psychology,
                     iconBg1 = Color(0xFFF97316),

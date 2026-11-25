@@ -3,11 +3,15 @@ package com.example.data.remote
 import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.os.Build
 import android.util.Base64
 import com.example.data.model.AppLanguage
 import com.example.data.model.GeminiLiveVoice
@@ -29,10 +33,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
-import kotlin.math.sqrt
 
 enum class LiveCallStatus {
     IDLE,
@@ -45,6 +46,7 @@ enum class LiveCallStatus {
 data class LiveCallSessionState(
     val status: LiveCallStatus = LiveCallStatus.IDLE,
     val isMuted: Boolean = false,
+    val isSpeakerOn: Boolean = true,
     val isMinimized: Boolean = false,
     val activeVoiceName: String = GeminiLiveVoice.AOEDE.voiceName,
     val modeLabel: String = "Gemini Live",
@@ -60,13 +62,14 @@ data class LiveCallSessionState(
 /**
  * Bidirectional real-time voice conversation manager backed by Google Gemini Live WebSocket API
  * (`BidiGenerateContent`), streaming 16kHz PCM microphone input and playing 24kHz PCM audio output
- * with live RMS energy measurement for real-time lip-sync animation.
+ * via loudspeaker (USAGE_MEDIA by default, or earpiece on toggle) with soft gain boost and live RMS lip-sync.
  */
 class GeminiLiveManager(
     context: Context,
     private val restService: GroqAndGeminiRestService
 ) {
     private val appContext = context.applicationContext
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val client = OkHttpClient.Builder()
@@ -92,6 +95,11 @@ class GeminiLiveManager(
     private var silenceDecayJob: Job? = null
     private var sessionJob: Job? = null
 
+    private var savedAudioMode: Int? = null
+    private var savedSpeakerphoneOn: Boolean? = null
+    private var activeFocusRequest: AudioFocusRequest? = null
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { }
+
     private val audioWriteLock = Any()
     @Volatile
     private var lastAudioWriteAtMs = 0L
@@ -105,7 +113,8 @@ class GeminiLiveManager(
         voice: GeminiLiveVoice,
         systemPrompt: String,
         language: AppLanguage,
-        onTranscriptTurn: (userText: String, assistantText: String) -> Unit = { _, _ -> }
+        onTranscriptTurn: (userText: String, assistantText: String) -> Unit = { _, _ -> },
+        onToolCall: suspend (name: String, args: JSONObject) -> JSONObject = { _, _ -> JSONObject().put("success", false) }
     ) {
         endSession()
         val key = apiKey.trim()
@@ -127,6 +136,7 @@ class GeminiLiveManager(
         _sessionState.value = LiveCallSessionState(
             status = LiveCallStatus.CONNECTING,
             isMuted = false,
+            isSpeakerOn = true,
             isMinimized = false,
             activeVoiceName = voice.voiceName,
             modeLabel = "Gemini Live • ${voice.voiceName}",
@@ -145,9 +155,106 @@ class GeminiLiveManager(
                 voice = voice,
                 systemPrompt = systemPrompt,
                 language = language,
-                onTranscriptTurn = onTranscriptTurn
+                onTranscriptTurn = onTranscriptTurn,
+                onToolCall = onToolCall
             )
         }
+    }
+
+    private fun buildLiveToolsArray(): JSONArray {
+        fun decl(name: String, description: String, properties: JSONObject, required: List<String> = emptyList()): JSONObject {
+            return JSONObject().apply {
+                put("name", name)
+                put("description", description)
+                put(
+                    "parameters",
+                    JSONObject().apply {
+                        put("type", "OBJECT")
+                        put("properties", properties)
+                        if (required.isNotEmpty()) {
+                            put("required", JSONArray(required))
+                        }
+                    }
+                )
+            }
+        }
+
+        val declarations = JSONArray().apply {
+            put(
+                decl(
+                    name = "open_app",
+                    description = "Opens any installed app on the user's phone by name (e.g. YouTube, WhatsApp, Facebook, Chrome, Settings, Camera, Gallery, Play Store).",
+                    properties = JSONObject().put(
+                        "app_name",
+                        JSONObject().put("type", "STRING").put("description", "App name in English or Bengali")
+                    ),
+                    required = listOf("app_name")
+                )
+            )
+            put(
+                decl(
+                    name = "type_text",
+                    description = "Types text into the currently focused text box, keyboard field, or search bar inside the open app.",
+                    properties = JSONObject().apply {
+                        put("text", JSONObject().put("type", "STRING").put("description", "Exact text to type"))
+                        put("submit", JSONObject().put("type", "BOOLEAN").put("description", "Whether to press Search/Send/Enter right after typing"))
+                    },
+                    required = listOf("text")
+                )
+            )
+            put(
+                decl(
+                    name = "tap_button",
+                    description = "Taps a visible button, icon, tab, or text item on the current phone screen by its label.",
+                    properties = JSONObject().put(
+                        "label",
+                        JSONObject().put("type", "STRING").put("description", "Visible text or button name such as Search, Send, Play")
+                    ),
+                    required = listOf("label")
+                )
+            )
+            put(
+                decl(
+                    name = "scroll_screen",
+                    description = "Scrolls the current app screen up or down.",
+                    properties = JSONObject().put(
+                        "direction",
+                        JSONObject().put("type", "STRING").put("description", "down or up")
+                    ),
+                    required = listOf("direction")
+                )
+            )
+            put(
+                decl(
+                    name = "system_navigation",
+                    description = "Performs Android system navigation actions: back, home, recents, notifications, quick_settings.",
+                    properties = JSONObject().put(
+                        "action",
+                        JSONObject().put("type", "STRING").put("description", "One of back, home, recents, notifications, quick_settings")
+                    ),
+                    required = listOf("action")
+                )
+            )
+            put(
+                decl(
+                    name = "open_url",
+                    description = "Opens a website URL or performs a Google search in the browser.",
+                    properties = JSONObject().put(
+                        "url",
+                        JSONObject().put("type", "STRING").put("description", "Website URL or search query")
+                    ),
+                    required = listOf("url")
+                )
+            )
+            put(
+                decl(
+                    name = "get_screen_info",
+                    description = "Reads the currently visible app and buttons/input boxes on screen so you know where to tap or type.",
+                    properties = JSONObject()
+                )
+            )
+        }
+        return JSONArray().put(JSONObject().put("functionDeclarations", declarations))
     }
 
     private fun openWebSocket(
@@ -158,7 +265,8 @@ class GeminiLiveManager(
         voice: GeminiLiveVoice,
         systemPrompt: String,
         language: AppLanguage,
-        onTranscriptTurn: (String, String) -> Unit
+        onTranscriptTurn: (String, String) -> Unit,
+        onToolCall: suspend (String, JSONObject) -> JSONObject
     ) {
         if (manualStopRequested) return
 
@@ -204,6 +312,7 @@ class GeminiLiveManager(
                             )
                             put("inputAudioTranscription", JSONObject())
                             put("outputAudioTranscription", JSONObject())
+                            put("tools", buildLiveToolsArray())
                         }
                     )
                 }
@@ -212,21 +321,25 @@ class GeminiLiveManager(
 
             override fun onMessage(ws: WebSocket, text: String) {
                 handleServerJson(
+                    ws = ws,
                     raw = text,
                     language = language,
                     userBuffer = userBuffer,
                     assistantBuffer = assistantBuffer,
-                    onTranscriptTurn = onTranscriptTurn
+                    onTranscriptTurn = onTranscriptTurn,
+                    onToolCall = onToolCall
                 )
             }
 
             override fun onMessage(ws: WebSocket, bytes: ByteString) {
                 handleServerJson(
+                    ws = ws,
                     raw = bytes.utf8(),
                     language = language,
                     userBuffer = userBuffer,
                     assistantBuffer = assistantBuffer,
-                    onTranscriptTurn = onTranscriptTurn
+                    onTranscriptTurn = onTranscriptTurn,
+                    onToolCall = onToolCall
                 )
             }
 
@@ -242,7 +355,8 @@ class GeminiLiveManager(
                         voice = voice,
                         systemPrompt = systemPrompt,
                         language = language,
-                        onTranscriptTurn = onTranscriptTurn
+                        onTranscriptTurn = onTranscriptTurn,
+                        onToolCall = onToolCall
                     )
                 } else if (!manualStopRequested && _sessionState.value.status != LiveCallStatus.ERROR) {
                     stopAudioHardware()
@@ -268,7 +382,8 @@ class GeminiLiveManager(
                         voice = voice,
                         systemPrompt = systemPrompt,
                         language = language,
-                        onTranscriptTurn = onTranscriptTurn
+                        onTranscriptTurn = onTranscriptTurn,
+                        onToolCall = onToolCall
                     )
                     return
                 }
@@ -286,13 +401,28 @@ class GeminiLiveManager(
     }
 
     private fun handleServerJson(
+        ws: WebSocket,
         raw: String,
         language: AppLanguage,
         userBuffer: StringBuilder,
         assistantBuffer: StringBuilder,
-        onTranscriptTurn: (String, String) -> Unit
+        onTranscriptTurn: (String, String) -> Unit,
+        onToolCall: suspend (String, JSONObject) -> JSONObject
     ) {
         val root = runCatching { JSONObject(raw) }.getOrNull() ?: return
+
+        val errObj = root.optJSONObject("error")
+        if (errObj != null) {
+            val msg = errObj.optString("message").ifBlank {
+                if (language == AppLanguage.BENGALI) "Gemini Live সার্ভার ত্রুটি দিয়েছে।" else "Gemini Live returned an error."
+            }
+            stopAudioHardware()
+            _sessionState.value = _sessionState.value.copy(
+                status = LiveCallStatus.ERROR,
+                errorMessage = msg
+            )
+            return
+        }
 
         if (root.has("setupComplete") && !setupComplete) {
             setupComplete = true
@@ -303,6 +433,36 @@ class GeminiLiveManager(
                 status = LiveCallStatus.LISTENING,
                 liveCaption = if (language == AppLanguage.BENGALI) "শাইলা শুনছে... সরাসরি কথা বলুন" else "Shaila is listening... Speak naturally"
             )
+            return
+        }
+
+        val toolCallObj = root.optJSONObject("toolCall")
+        val fnCalls = toolCallObj?.optJSONArray("functionCalls")
+        if (fnCalls != null && fnCalls.length() > 0) {
+            scope.launch {
+                val responsesArr = JSONArray()
+                for (i in 0 until fnCalls.length()) {
+                    val call = fnCalls.optJSONObject(i) ?: continue
+                    val callId = call.optString("id")
+                    val fnName = call.optString("name")
+                    val args = call.optJSONObject("args") ?: JSONObject()
+                    val resultJson = runCatching { onToolCall(fnName, args) }
+                        .getOrElse { err -> JSONObject().put("success", false).put("error", err.localizedMessage ?: "Failed") }
+
+                    responsesArr.put(
+                        JSONObject().apply {
+                            put("id", callId)
+                            put("name", fnName)
+                            put("response", resultJson)
+                        }
+                    )
+                }
+                val toolResponsePayload = JSONObject().put(
+                    "toolResponse",
+                    JSONObject().put("functionResponses", responsesArr)
+                ).toString()
+                ws.send(toolResponsePayload)
+            }
             return
         }
 
@@ -376,7 +536,89 @@ class GeminiLiveManager(
         }
     }
 
+    private fun configureAudioRouting(speakerOn: Boolean) {
+        runCatching {
+            if (savedAudioMode == null) {
+                savedAudioMode = audioManager.mode
+            }
+            @Suppress("DEPRECATION")
+            if (savedSpeakerphoneOn == null) {
+                savedSpeakerphoneOn = audioManager.isSpeakerphoneOn
+            }
+
+            if (speakerOn) {
+                // Keep MODE_NORMAL so USAGE_MEDIA plays loud through the main bottom loudspeaker
+                // (or connected Bluetooth/wired headphones) instead of the tiny call earpiece.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    audioManager.clearCommunicationDevice()
+                }
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = false
+                audioManager.mode = AudioManager.MODE_NORMAL
+            } else {
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val earpiece = audioManager.availableCommunicationDevices
+                        .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+                    if (earpiece != null) {
+                        audioManager.setCommunicationDevice(earpiece)
+                    } else {
+                        audioManager.clearCommunicationDevice()
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.isSpeakerphoneOn = false
+                }
+            }
+
+            val attrs = AudioAttributes.Builder()
+                .setUsage(if (speakerOn) AudioAttributes.USAGE_MEDIA else AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                activeFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+                val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(attrs)
+                    .setAcceptsDelayedFocusGain(false)
+                    .setOnAudioFocusChangeListener(focusListener)
+                    .build()
+                activeFocusRequest = req
+                audioManager.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(
+                    focusListener,
+                    if (speakerOn) AudioManager.STREAM_MUSIC else AudioManager.STREAM_VOICE_CALL,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                )
+            }
+        }
+    }
+
+    private fun restoreAudioRouting() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                activeFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+                activeFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(focusListener)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice()
+            }
+            @Suppress("DEPRECATION")
+            savedSpeakerphoneOn?.let { audioManager.isSpeakerphoneOn = it }
+            savedAudioMode?.let { audioManager.mode = it }
+        }
+        savedSpeakerphoneOn = null
+        savedAudioMode = null
+    }
+
     private fun startAudioOutput() {
+        val speakerOn = _sessionState.value.isSpeakerOn
+        configureAudioRouting(speakerOn)
+
         val sampleRate = 24000
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate,
@@ -389,7 +631,10 @@ class GeminiLiveManager(
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setUsage(
+                            if (speakerOn) AudioAttributes.USAGE_MEDIA
+                            else AudioAttributes.USAGE_VOICE_COMMUNICATION
+                        )
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
@@ -403,13 +648,17 @@ class GeminiLiveManager(
                 .setBufferSizeInBytes(minBuf * 2)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
-                .apply { play() }
+                .apply {
+                    setVolume(AudioTrack.getMaxVolume())
+                    play()
+                }
         }
     }
 
     private fun playPcmChunk(pcmBytes: ByteArray) {
         if (pcmBytes.isEmpty()) return
-        val rms = computePcm16RmsNormalized(pcmBytes, pcmBytes.size)
+        val boostedPcm = PcmAudioProcessor.applySoftGain(pcmBytes, gain = 1.95f)
+        val rms = PcmAudioProcessor.computePcm16RmsNormalized(boostedPcm, boostedPcm.size)
         _speakingLevel.value = (_speakingLevel.value * 0.35f + rms * 0.65f).coerceIn(0f, 1f)
         lastAudioWriteAtMs = System.currentTimeMillis()
 
@@ -419,7 +668,7 @@ class GeminiLiveManager(
                 if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                     track.play()
                 }
-                track.write(pcmBytes, 0, pcmBytes.size, AudioTrack.WRITE_BLOCKING)
+                track.write(boostedPcm, 0, boostedPcm.size, AudioTrack.WRITE_BLOCKING)
             }
         }
     }
@@ -435,6 +684,33 @@ class GeminiLiveManager(
     }
 
     @SuppressLint("MissingPermission")
+    private fun createAudioRecord(sampleRate: Int, bufferSize: Int): AudioRecord? {
+        val sources = listOf(
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC
+        )
+        for (src in sources) {
+            val candidate = try {
+                AudioRecord(
+                    src,
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+            } catch (_: Exception) {
+                null
+            }
+            if (candidate != null && candidate.state == AudioRecord.STATE_INITIALIZED) {
+                return candidate
+            }
+            runCatching { candidate?.release() }
+        }
+        return null
+    }
+
+    @SuppressLint("MissingPermission")
     private fun startMicStreaming() {
         micStreamJob?.cancel()
         micStreamJob = scope.launch {
@@ -445,24 +721,12 @@ class GeminiLiveManager(
                 AudioFormat.ENCODING_PCM_16BIT
             ).coerceAtLeast(3200)
 
-            val recorder = try {
-                AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                    sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    minBuf * 2
-                )
-            } catch (_: Exception) {
-                null
-            }
-
-            if (recorder == null || recorder.state != AudioRecord.STATE_INITIALIZED) {
+            val recorder = createAudioRecord(sampleRate, minBuf * 2)
+            if (recorder == null) {
                 _sessionState.value = _sessionState.value.copy(
                     status = LiveCallStatus.ERROR,
                     errorMessage = "মাইক্রোফোন চালু করা যায়নি।"
                 )
-                recorder?.release()
                 return@launch
             }
 
@@ -483,7 +747,7 @@ class GeminiLiveManager(
                         _micLevel.value = 0f
                         continue
                     }
-                    val rms = computePcm16RmsNormalized(buffer, read)
+                    val rms = PcmAudioProcessor.computePcm16RmsNormalized(buffer, read)
                     _micLevel.value = rms
 
                     val b64 = Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP)
@@ -516,25 +780,20 @@ class GeminiLiveManager(
         }
     }
 
-    private fun computePcm16RmsNormalized(bytes: ByteArray, length: Int): Float {
-        val sampleCount = length / 2
-        if (sampleCount <= 0) return 0f
-        val shortBuf = ByteBuffer.wrap(bytes, 0, sampleCount * 2)
-            .order(ByteOrder.LITTLE_ENDIAN)
-            .asShortBuffer()
-        var sumSq = 0.0
-        for (i in 0 until sampleCount) {
-            val sample = shortBuf.get(i).toDouble() / 32768.0
-            sumSq += sample * sample
-        }
-        val rms = sqrt(sumSq / sampleCount)
-        return (rms * 4.5).toFloat().coerceIn(0f, 1f)
-    }
-
     fun toggleMute() {
         val current = _sessionState.value
         _sessionState.value = current.copy(isMuted = !current.isMuted)
         if (_sessionState.value.isMuted) _micLevel.value = 0f
+    }
+
+    fun toggleSpeaker() {
+        val nextSpeaker = !_sessionState.value.isSpeakerOn
+        _sessionState.value = _sessionState.value.copy(isSpeakerOn = nextSpeaker)
+        if (setupComplete && !manualStopRequested) {
+            scope.launch {
+                startAudioOutput()
+            }
+        }
     }
 
     fun setMinimized(minimized: Boolean) {
@@ -568,6 +827,7 @@ class GeminiLiveManager(
             audioTrack = null
         }
 
+        restoreAudioRouting()
         _speakingLevel.value = 0f
         _micLevel.value = 0f
     }

@@ -37,6 +37,9 @@ data class ApiKeysSnapshot(
 
     fun hasAnyChatBrainKey(): Boolean =
         geminiKey.isNotBlank() || groqKeysList().isNotEmpty() || claudeKey.isNotBlank()
+
+    fun hasAnyVoiceApiKey(): Boolean =
+        geminiKey.isNotBlank() || elevenLabsKey.isNotBlank() || openAiKey.isNotBlank() || xaiKey.isNotBlank()
 }
 
 class SecureStorageManager(context: Context) {

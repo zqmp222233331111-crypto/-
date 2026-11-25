@@ -1,40 +1,37 @@
 package com.example.data.remote
 
 import android.content.Context
+import com.example.data.local.ApiKeyType
 import com.example.data.local.SecureStorageManager
 import com.example.data.model.AppSettings
 import com.example.data.model.ShailaCatalog
 import com.example.data.model.VoiceProviderType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.abs
-import kotlin.math.sin
 
 data class SpeakOutcome(
     val usedProviderLabel: String,
-    val succeeded: Boolean
+    val succeeded: Boolean,
+    val missingVoiceKey: Boolean = false,
+    val errorMessage: String? = null
 )
 
 class VoiceEngine(
     context: Context,
-    secureStorage: SecureStorageManager
+    private val secureStorage: SecureStorageManager
 ) {
     private val streamPlayer = AudioStreamPlayer(context.applicationContext)
     val elevenLabs = ElevenLabsTtsProvider(secureStorage, streamPlayer)
     val openAi = OpenAiTtsProvider(secureStorage, streamPlayer)
     val xai = XaiTtsProvider(secureStorage, streamPlayer)
-    private val deviceTts = AndroidBuiltInTtsProvider(context.applicationContext)
+    val geminiTts = GeminiTtsProvider(secureStorage, streamPlayer)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var deviceRhythmJob: Job? = null
 
     private val _ttsSpeechLevel = MutableStateFlow(0f)
     val ttsSpeechLevel: StateFlow<Float> = _ttsSpeechLevel.asStateFlow()
@@ -53,27 +50,23 @@ class VoiceEngine(
         VoiceProviderType.XAI -> xai
     }
 
-    private fun startDeviceRhythm() {
-        deviceRhythmJob?.cancel()
-        deviceRhythmJob = scope.launch {
-            var phase = 0f
-            while (isActive) {
-                phase += 0.38f
-                _ttsSpeechLevel.value = (0.3f + 0.55f * abs(sin(phase))).coerceIn(0.15f, 0.95f)
-                delay(55)
-            }
-        }
+    private fun hasKeyFor(type: VoiceProviderType): Boolean = when (type) {
+        VoiceProviderType.ELEVENLABS -> secureStorage.getKey(ApiKeyType.ELEVENLABS).isNotBlank()
+        VoiceProviderType.OPENAI -> secureStorage.getKey(ApiKeyType.OPENAI).isNotBlank()
+        VoiceProviderType.XAI -> secureStorage.getKey(ApiKeyType.XAI).isNotBlank()
     }
 
-    private fun stopDeviceRhythm() {
-        deviceRhythmJob?.cancel()
-        deviceRhythmJob = null
-        _ttsSpeechLevel.value = 0f
-    }
+    fun hasAnyVoiceKey(): Boolean = secureStorage.keysState.value.hasAnyVoiceApiKey() ||
+        secureStorage.getKey(ApiKeyType.GEMINI).isNotBlank() ||
+        secureStorage.getKey(ApiKeyType.ELEVENLABS).isNotBlank() ||
+        secureStorage.getKey(ApiKeyType.OPENAI).isNotBlank() ||
+        secureStorage.getKey(ApiKeyType.XAI).isNotBlank()
 
     /**
-     * Common TTS interface entrypoint used across the entire app.
-     * Automatically falls back to the next provider, then finally to built-in Android TTS.
+     * Strict API-only TTS entrypoint (no offline/robotic device TTS fallback):
+     * 1) Configured cloud TTS (ElevenLabs -> OpenAI -> xAI) when keys are present
+     * 2) Gemini Voice TTS (`gemini-2.5-flash-preview-tts`) when a Gemini key is present
+     * Without a valid API key, Shaila does not speak.
      */
     suspend fun speak(
         text: String,
@@ -86,7 +79,16 @@ class VoiceEngine(
             .replace("#", "")
             .replace("`", "")
             .trim()
-        if (cleanText.isEmpty()) return SpeakOutcome("None", false)
+        if (cleanText.isEmpty()) return SpeakOutcome("", false)
+
+        if (!hasAnyVoiceKey()) {
+            return SpeakOutcome(
+                usedProviderLabel = "",
+                succeeded = false,
+                missingVoiceKey = true,
+                errorMessage = "API Key ছাড়া ভয়েস চালু হবে না।"
+            )
+        }
 
         val options = TtsOptions(
             speed = settings.voiceSpeed,
@@ -100,7 +102,9 @@ class VoiceEngine(
             VoiceProviderType.entries.filter { it != settings.voiceProvider }.forEach { add(it) }
         }
 
+        var lastError: String? = null
         for ((index, type) in orderedProviders.withIndex()) {
+            if (!hasKeyFor(type)) continue
             val provider = providerFor(type)
             val resolvedVoiceId = if (index == 0) {
                 voiceId.ifBlank { ShailaCatalog.defaultVoiceId(type) }
@@ -119,22 +123,31 @@ class VoiceEngine(
             )
             if (result.isSuccess) {
                 return SpeakOutcome(provider.displayLabel, true)
+            } else {
+                lastError = result.exceptionOrNull()?.localizedMessage
             }
         }
 
-        // Final fallback: phone's built-in Android TTS
-        startDeviceRhythm()
-        val fallbackResult = try {
-            deviceTts.speak(
+        if (secureStorage.getKey(ApiKeyType.GEMINI).isNotBlank()) {
+            val geminiRes = geminiTts.speak(
                 text = cleanText,
-                voiceId = "",
+                voiceId = settings.geminiLiveVoice.voiceName,
                 options = options,
                 onPlaybackStarted = onPlaybackStarted
             )
-        } finally {
-            stopDeviceRhythm()
+            if (geminiRes.isSuccess) {
+                return SpeakOutcome("Gemini • ${settings.geminiLiveVoice.voiceName}", true)
+            } else {
+                lastError = geminiRes.exceptionOrNull()?.localizedMessage
+            }
         }
-        return SpeakOutcome(deviceTts.displayLabel, fallbackResult.isSuccess)
+
+        return SpeakOutcome(
+            usedProviderLabel = "",
+            succeeded = false,
+            missingVoiceKey = false,
+            errorMessage = lastError ?: "ভয়েস API থেকে অডিও পাওয়া যায়নি।"
+        )
     }
 
     suspend fun previewVoice(
@@ -156,36 +169,21 @@ class VoiceEngine(
         )
         val provider = providerFor(providerType)
         val cloudResult = provider.speak(sampleText, voiceId, options, onPlaybackStarted)
-        return if (cloudResult.isSuccess) {
-            Result.success(provider.displayLabel)
-        } else {
-            // Try device TTS preview if API key isn't configured yet, while reporting cause
-            startDeviceRhythm()
-            val fallback = try {
-                deviceTts.speak(sampleText, "", options, onPlaybackStarted)
-            } finally {
-                stopDeviceRhythm()
-            }
-            if (fallback.isSuccess) {
-                Result.failure(
-                    IllegalStateException(
-                        "${provider.displayLabel} প্রিভিউ ব্যর্থ হয়েছে (${cloudResult.exceptionOrNull()?.message}), তাই ফোনের বিল্ট-ইন ভয়েস বাজানো হয়েছে।"
-                    )
-                )
-            } else {
-                Result.failure(cloudResult.exceptionOrNull() ?: IllegalStateException("Preview failed"))
-            }
+        if (cloudResult.isSuccess) {
+            return Result.success(provider.displayLabel)
         }
+
+        return Result.failure(
+            cloudResult.exceptionOrNull()
+                ?: IllegalStateException("${provider.displayLabel} প্রিভিউয়ের জন্য API Key যোগ করুন।")
+        )
     }
 
     fun stop() {
-        stopDeviceRhythm()
         streamPlayer.stop()
-        deviceTts.stop()
     }
 
     fun release() {
         stop()
-        deviceTts.shutdown()
     }
 }

@@ -773,9 +773,9 @@ private fun ApiSetupSlide(
             )
             Text(
                 text = if (isBn) {
-                    "ভয়েস কী না দিলেও ফোনের বিল্ট-ইন TTS দিয়ে শাইলা কথা বলতে পারবে।"
+                    "ভয়েস, লাইভ কল ও কথা বলার জন্য অন্তত একটি API Key (যেমন ফ্রি Gemini Key) যোগ করা আবশ্যক—কোনো অফলাইন রোবটিক ভয়েস ব্যবহার হয় না।"
                 } else {
-                    "Even without cloud voice keys, Shaila can speak using your phone's built-in TTS."
+                    "An API key (such as a free Gemini key) is required for Shaila to speak or start Live Calls—no offline robotic voice is used."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

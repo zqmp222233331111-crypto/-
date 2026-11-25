@@ -23,11 +23,13 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
@@ -80,6 +82,7 @@ fun LiveVoiceScreen(
     speakingLevel: Float,
     micLevel: Float,
     onToggleMute: () -> Unit,
+    onToggleSpeaker: () -> Unit = {},
     onMinimize: () -> Unit,
     onEndCall: () -> Unit,
     onRetry: () -> Unit,
@@ -288,11 +291,11 @@ fun LiveVoiceScreen(
                 }
             }
 
-            // Bottom Call Controls: Mute | Coral-Red End | Minimize
+            // Bottom Call Controls: Mute | Speaker | Coral-Red End | Minimize
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 420.dp)
+                    .widthIn(max = 460.dp)
                     .padding(bottom = 16.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
@@ -307,7 +310,7 @@ fun LiveVoiceScreen(
                             if (liveState.isMuted) AccentVioletBright else ext.glassBorder
                         ),
                         modifier = Modifier
-                            .size(58.dp)
+                            .size(54.dp)
                             .clip(CircleShape)
                             .testTag("live_call_mute_button")
                             .clickable(onClick = onToggleMute)
@@ -317,7 +320,7 @@ fun LiveVoiceScreen(
                                 imageVector = if (liveState.isMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
                                 contentDescription = if (liveState.isMuted) "Unmute" else "Mute",
                                 tint = Color.White,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     }
@@ -333,11 +336,47 @@ fun LiveVoiceScreen(
                     )
                 }
 
+                // Speaker / Earpiece toggle button
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (liveState.isSpeakerOn) AccentVioletPrimary.copy(alpha = 0.5f) else ext.glassFill,
+                        border = BorderStroke(
+                            1.5.dp,
+                            if (liveState.isSpeakerOn) AccentVioletBright else ext.glassBorder
+                        ),
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(CircleShape)
+                            .testTag("live_call_speaker_button")
+                            .clickable(onClick = onToggleSpeaker)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (liveState.isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.Filled.PhoneInTalk,
+                                contentDescription = if (liveState.isSpeakerOn) "Speaker" else "Earpiece",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (liveState.isSpeakerOn) {
+                            if (isBn) "স্পিকার" else "Speaker"
+                        } else {
+                            if (isBn) "ইয়ারপিস" else "Earpiece"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.85f)
+                    )
+                }
+
                 // End Call coral-red button
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
                         modifier = Modifier
-                            .size(74.dp)
+                            .size(70.dp)
                             .shadow(16.dp, CircleShape, ambientColor = CoralEndCall, spotColor = CoralEndCall)
                             .clip(CircleShape)
                             .background(CoralEndCall)
@@ -349,7 +388,7 @@ fun LiveVoiceScreen(
                             imageVector = Icons.Filled.CallEnd,
                             contentDescription = if (isBn) "কল শেষ করুন" else "End Call",
                             tint = Color.White,
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(30.dp)
                         )
                     }
                     Spacer(modifier = Modifier.height(6.dp))
@@ -367,7 +406,7 @@ fun LiveVoiceScreen(
                         color = ext.glassFill,
                         border = BorderStroke(1.5.dp, ext.glassBorder),
                         modifier = Modifier
-                            .size(58.dp)
+                            .size(54.dp)
                             .clip(CircleShape)
                             .testTag("live_call_minimize_button")
                             .clickable {
@@ -379,7 +418,7 @@ fun LiveVoiceScreen(
                                 imageVector = Icons.Filled.KeyboardArrowDown,
                                 contentDescription = if (isBn) "মিনিমাইজ" else "Minimize",
                                 tint = Color.White,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             )
                         }
                     }

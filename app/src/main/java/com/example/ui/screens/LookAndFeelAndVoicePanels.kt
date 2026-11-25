@@ -514,9 +514,9 @@ fun VoiceAndPersonalitySection(
         )
         Text(
             text = if (isBn) {
-                "লাইভ কল চলাকালে এই স্বাভাবিক নারী কণ্ঠে কথা বলবে।"
+                "লাইভ কল ও হোম-চ্যাটের উত্তরে এই স্বাভাবিক নারী কণ্ঠে কথা বলবে (Gemini Key থাকলেই কাজ করবে)।"
             } else {
-                "Used during real-time Live Calls when a Gemini key is configured."
+                "Used for both real-time Live Calls and Home/Chat replies whenever a Gemini key is configured."
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant

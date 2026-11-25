@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.device.PhoneControlManager
 import com.example.data.local.ApiKeyType
 import com.example.data.local.ApiKeysSnapshot
 import com.example.data.local.SecureStorageManager
@@ -42,6 +43,7 @@ import com.example.data.remote.LiveCallStatus
 import com.example.data.remote.ShailaAiException
 import com.example.data.remote.VoiceEngine
 import com.example.data.repository.ShailaRepository
+import com.example.service.ShailaAccessibilityService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -105,6 +107,7 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
     private val apkDownloader = ApkDownloader(application)
     val frameExtractor = VideoFrameExtractor(application)
     val speechManager = SpeechRecognitionManager(application)
+    val phoneControl = PhoneControlManager(application)
 
     private val repository = ShailaRepository(
         context = application,
@@ -193,6 +196,21 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _hasMicPermission = MutableStateFlow(false)
     val hasMicPermission: StateFlow<Boolean> = _hasMicPermission.asStateFlow()
+
+    private val _manualAccessibilityEnabled = MutableStateFlow(phoneControl.isAccessibilityEnabled())
+    val isAccessibilityEnabled: StateFlow<Boolean> = combine(
+        ShailaAccessibilityService.isConnected,
+        _manualAccessibilityEnabled
+    ) { connected, manual ->
+        connected || manual
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = phoneControl.isAccessibilityEnabled()
+    )
+
+    private val _needsAccessibilityDialog = MutableStateFlow(false)
+    val needsAccessibilityDialog: StateFlow<Boolean> = _needsAccessibilityDialog.asStateFlow()
 
     private val _galleryState = MutableStateFlow(GalleryUiState())
     val galleryState: StateFlow<GalleryUiState> = _galleryState.asStateFlow()
@@ -289,14 +307,29 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         _hasMicPermission.value = granted
     }
 
+    fun refreshAccessibilityStatus() {
+        _manualAccessibilityEnabled.value = phoneControl.isAccessibilityEnabled()
+    }
+
+    fun openAccessibilitySettings() {
+        _needsAccessibilityDialog.value = false
+        phoneControl.openAccessibilitySettings()
+    }
+
+    fun dismissAccessibilityDialog() {
+        _needsAccessibilityDialog.value = false
+    }
+
     fun triggerStartupGreetingIfNeeded() {
         if (hasGreetedThisSession) return
         val current = settings.value
         if (!current.onboardingCompleted) return
         hasGreetedThisSession = true
 
-        if (!current.autoSpeakReplies) {
-            if (current.listenOnAppOpen && _hasMicPermission.value) {
+        val keys = apiKeys.value
+        val canSpeakWithApi = current.autoSpeakReplies && keys.hasAnyVoiceApiKey()
+        if (!canSpeakWithApi) {
+            if (current.listenOnAppOpen && _hasMicPermission.value && keys.hasAnyChatBrainKey()) {
                 viewModelScope.launch {
                     delay(450)
                     startVoiceListening()
@@ -357,13 +390,20 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                         viewModelScope.launch {
                             repository.saveLiveConversationTurn(userText, assistantText)
                         }
+                    },
+                    onToolCall = { name, args ->
+                        val result = phoneControl.executeLiveToolCall(name, args)
+                        if (result.optBoolean("needs_accessibility", false)) {
+                            _needsAccessibilityDialog.value = true
+                        }
+                        result
                     }
                 )
             }
             return
         }
 
-        if (keys.hasAnyChatBrainKey()) {
+        if (keys.hasAnyChatBrainKey() && keys.hasAnyVoiceApiKey()) {
             startFallbackLiveCallLoop()
             return
         }
@@ -372,9 +412,17 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
             status = LiveCallStatus.ERROR,
             modeLabel = "Live Call",
             errorMessage = if (isBn) {
-                "লাইভ কলের জন্য Settings → API Keys থেকে একটি ফ্রি Gemini বা Groq Key যোগ করুন।"
+                if (keys.hasAnyChatBrainKey()) {
+                    "লাইভ ভয়েস কলের জন্য Gemini Key অথবা একটি ভয়েস API Key (ElevenLabs / OpenAI / xAI) যোগ করুন।"
+                } else {
+                    "API Key ছাড়া লাইভ কল বা ভয়েস চালু হবে না। Settings → API Keys থেকে একটি Gemini API Key যোগ করুন।"
+                }
             } else {
-                "Please add a free Gemini or Groq API key in Settings → API Keys to start a Live Call."
+                if (keys.hasAnyChatBrainKey()) {
+                    "Live Voice requires a Gemini Key or a Voice API Key (ElevenLabs / OpenAI / xAI) in Settings → API Keys."
+                } else {
+                    "Live Call and Voice require an API key. Please add a Gemini API key in Settings → API Keys."
+                }
             }
         )
     }
@@ -412,7 +460,15 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                     liveCaption = transcript
                 )
                 val res = repository.askAssistant(transcript)
-                val replyText = res.getOrNull()?.text
+                val turnResult = res.getOrNull()
+                val replyText = turnResult?.message?.text
+                val actions = turnResult?.actions.orEmpty()
+                if (actions.isNotEmpty()) {
+                    val summary = phoneControl.executeActions(actions)
+                    if (summary.needsAccessibilitySetup) {
+                        _needsAccessibilityDialog.value = true
+                    }
+                }
                 if (replyText.isNullOrBlank()) {
                     delay(400)
                     continue
@@ -422,7 +478,18 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                     status = LiveCallStatus.SPEAKING,
                     liveCaption = replyText.take(110)
                 )
-                repository.speakReply(replyText)
+                val speakOutcome = repository.speakReply(replyText)
+                if (!speakOutcome.succeeded) {
+                    _fallbackLiveState.value = _fallbackLiveState.value.copy(
+                        status = LiveCallStatus.ERROR,
+                        errorMessage = speakOutcome.errorMessage ?: if (isBn) {
+                            "ভয়েস API Key ছাড়া কথা বলা যাবে না।"
+                        } else {
+                            "Voice requires a valid API key."
+                        }
+                    )
+                    break
+                }
                 delay(220)
             }
         }
@@ -439,6 +506,16 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                 fallbackSpeechDeferred = null
                 speechManager.cancel()
             }
+        }
+    }
+
+    fun toggleLiveSpeaker() {
+        if (geminiLiveManager.sessionState.value.status != LiveCallStatus.IDLE) {
+            geminiLiveManager.toggleSpeaker()
+        } else {
+            _fallbackLiveState.value = _fallbackLiveState.value.copy(
+                isSpeakerOn = !_fallbackLiveState.value.isSpeakerOn
+            )
         }
     }
 
@@ -477,9 +554,24 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         _orbState.value = OrbState.THINKING
 
         viewModelScope.launch {
+            val isBn = settings.value.appLanguage == AppLanguage.BENGALI
             val result = repository.askAssistant(text)
-            result.onSuccess { reply ->
-                if (settings.value.autoSpeakReplies) {
+            result.onSuccess { turn ->
+                val reply = turn.message
+                if (turn.actions.isNotEmpty()) {
+                    launch {
+                        val summary = phoneControl.executeActions(turn.actions)
+                        if (summary.needsAccessibilitySetup) {
+                            _needsAccessibilityDialog.value = true
+                            _statusMessage.value = if (isBn) {
+                                summary.feedbackMessageBn
+                            } else {
+                                summary.feedbackMessageEn
+                            }
+                        }
+                    }
+                }
+                if (settings.value.autoSpeakReplies && reply.text.isNotBlank()) {
                     speakOut(reply.text, allowContinuousNext = fromVoice)
                 } else {
                     _orbState.value = OrbState.IDLE
@@ -519,14 +611,38 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         allowContinuousNext: Boolean = false,
         listenAfterComplete: Boolean = false
     ) {
+        val isBn = settings.value.appLanguage == AppLanguage.BENGALI
+        if (!apiKeys.value.hasAnyVoiceApiKey()) {
+            _activeVoiceSource.value = null
+            _orbState.value = OrbState.IDLE
+            _needsApiKeyBanner.value = true
+            _statusMessage.value = if (isBn) {
+                "ভয়েস চালু করতে Settings → API Keys থেকে একটি Gemini (বা ElevenLabs/OpenAI/xAI) API Key যোগ করুন।"
+            } else {
+                "Add a Gemini (or ElevenLabs/OpenAI/xAI) API key in Settings → API Keys to enable voice."
+            }
+            return
+        }
+
         voiceJob?.cancel()
         voiceJob = viewModelScope.launch {
             _orbState.value = OrbState.SPEAKING
             val outcome = repository.speakReply(text)
-            _activeVoiceSource.value = outcome.usedProviderLabel
+            if (outcome.succeeded) {
+                _activeVoiceSource.value = outcome.usedProviderLabel
+            } else {
+                _activeVoiceSource.value = null
+                if (outcome.missingVoiceKey) {
+                    _needsApiKeyBanner.value = true
+                }
+                val err = outcome.errorMessage
+                if (!err.isNullOrBlank()) {
+                    _statusMessage.value = err
+                }
+            }
             _orbState.value = OrbState.IDLE
             val shouldListen = ((allowContinuousNext && settings.value.continuousConversation) || listenAfterComplete) &&
-                _hasMicPermission.value
+                _hasMicPermission.value && apiKeys.value.hasAnyChatBrainKey()
             if (shouldListen) {
                 delay(350)
                 startVoiceListening()
