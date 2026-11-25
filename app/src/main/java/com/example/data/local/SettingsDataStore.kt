@@ -11,8 +11,13 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.model.AccentColorPreset
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppSettings
+import com.example.data.model.GeminiLiveVoice
+import com.example.data.model.HomeCharacterStyle
+import com.example.data.model.PersonalityPreset
+import com.example.data.model.ResponseStyle
 import com.example.data.model.ShailaCatalog
 import com.example.data.model.SpeechLanguage
+import com.example.data.model.VoiceOption
 import com.example.data.model.VoiceProviderType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -32,6 +37,8 @@ class SettingsDataStore(private val context: Context) {
         val ELEVENLABS_VOICE = stringPreferencesKey("elevenlabs_voice")
         val OPENAI_VOICE = stringPreferencesKey("openai_voice")
         val XAI_VOICE = stringPreferencesKey("xai_voice")
+        val GEMINI_LIVE_VOICE = stringPreferencesKey("gemini_live_voice")
+        val CUSTOM_ELEVENLABS_VOICES = stringPreferencesKey("custom_elevenlabs_voices")
         val VOICE_SPEED = floatPreferencesKey("voice_speed")
         val ELEVENLABS_STABILITY = floatPreferencesKey("elevenlabs_stability")
         val ELEVENLABS_STYLE = floatPreferencesKey("elevenlabs_style")
@@ -45,6 +52,16 @@ class SettingsDataStore(private val context: Context) {
         val REGION_FULL_BODY = stringPreferencesKey("region_full_body")
         val REGION_AVATAR = stringPreferencesKey("region_avatar")
         val APK_UPDATE_URL = stringPreferencesKey("apk_update_url")
+        val ASSISTANT_NAME = stringPreferencesKey("assistant_name")
+        val PERSONALITY_PRESET = stringPreferencesKey("personality_preset")
+        val CUSTOM_PERSONALITY_NAME = stringPreferencesKey("custom_personality_name")
+        val CUSTOM_PERSONALITY_PROMPT = stringPreferencesKey("custom_personality_prompt")
+        val RESPONSE_STYLE = stringPreferencesKey("response_style")
+        val HOME_CHARACTER_STYLE = stringPreferencesKey("home_character_style")
+        val CUSTOM_CHARACTER_URI = stringPreferencesKey("custom_character_uri")
+        val SHOW_HER_EVERYWHERE = booleanPreferencesKey("show_her_everywhere")
+        val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
+        val LISTEN_ON_APP_OPEN = booleanPreferencesKey("listen_on_app_open")
     }
 
     val imageRegionsFlow: Flow<com.example.data.model.ImageRegionsConfig> = context.shailaDataStore.data.map { prefs ->
@@ -69,6 +86,33 @@ class SettingsDataStore(private val context: Context) {
     private fun encodeRegion(r: com.example.data.model.ImageRegionRect): String =
         "${r.x},${r.y},${r.width},${r.height}"
 
+    private fun parseCustomVoices(raw: String?): List<VoiceOption> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return raw.split("\n").mapNotNull { line ->
+            val parts = line.split("||")
+            if (parts.size >= 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
+                val desc = parts.getOrNull(2)?.takeIf { it.isNotBlank() } ?: "কাস্টম ফিমেল ভয়েস"
+                VoiceOption(
+                    voiceId = parts[0].trim(),
+                    name = parts[1].trim(),
+                    descriptionBn = desc,
+                    descriptionEn = desc,
+                    provider = VoiceProviderType.ELEVENLABS,
+                    isCustom = true
+                )
+            } else {
+                null
+            }
+        }.distinctBy { it.voiceId }
+    }
+
+    private fun encodeCustomVoices(voices: List<VoiceOption>): String =
+        voices.joinToString("\n") { v ->
+            val safeName = v.name.replace("||", " ").replace("\n", " ").trim()
+            val safeDesc = v.descriptionBn.replace("||", " ").replace("\n", " ").trim()
+            "${v.voiceId.trim()}||$safeName||$safeDesc"
+        }
+
     val settingsFlow: Flow<AppSettings> = context.shailaDataStore.data.map { prefs ->
         AppSettings(
             onboardingCompleted = prefs[Keys.ONBOARDING_DONE] ?: false,
@@ -83,6 +127,9 @@ class SettingsDataStore(private val context: Context) {
                 ?: ShailaCatalog.elevenLabsVoices.first().voiceId,
             openAiVoiceId = prefs[Keys.OPENAI_VOICE] ?: ShailaCatalog.openAiVoices.first().voiceId,
             xaiVoiceId = prefs[Keys.XAI_VOICE] ?: ShailaCatalog.xaiVoices.first().voiceId,
+            geminiLiveVoice = GeminiLiveVoice.entries.find { it.voiceName == prefs[Keys.GEMINI_LIVE_VOICE] }
+                ?: GeminiLiveVoice.AOEDE,
+            customElevenLabsVoices = parseCustomVoices(prefs[Keys.CUSTOM_ELEVENLABS_VOICES]),
             voiceSpeed = prefs[Keys.VOICE_SPEED] ?: 1.0f,
             elevenLabsStability = prefs[Keys.ELEVENLABS_STABILITY] ?: 0.50f,
             elevenLabsStyle = prefs[Keys.ELEVENLABS_STYLE] ?: 0.25f,
@@ -92,7 +139,20 @@ class SettingsDataStore(private val context: Context) {
             darkTheme = prefs[Keys.DARK_THEME] ?: true,
             accentPreset = AccentColorPreset.entries.find { it.id == prefs[Keys.ACCENT_PRESET] }
                 ?: AccentColorPreset.VIOLET,
-            apkUpdateUrl = prefs[Keys.APK_UPDATE_URL] ?: ""
+            apkUpdateUrl = prefs[Keys.APK_UPDATE_URL] ?: "",
+            assistantName = prefs[Keys.ASSISTANT_NAME]?.takeIf { it.isNotBlank() } ?: "Shaila",
+            personalityPreset = PersonalityPreset.entries.find { it.id == prefs[Keys.PERSONALITY_PRESET] }
+                ?: PersonalityPreset.FRIENDLY,
+            customPersonalityName = prefs[Keys.CUSTOM_PERSONALITY_NAME] ?: "",
+            customPersonalityPrompt = prefs[Keys.CUSTOM_PERSONALITY_PROMPT] ?: "",
+            responseStyle = ResponseStyle.entries.find { it.id == prefs[Keys.RESPONSE_STYLE] }
+                ?: ResponseStyle.BALANCED,
+            homeCharacterStyle = HomeCharacterStyle.entries.find { it.id == prefs[Keys.HOME_CHARACTER_STYLE] }
+                ?: HomeCharacterStyle.HALF_BODY_SHAILA,
+            customCharacterUri = prefs[Keys.CUSTOM_CHARACTER_URI] ?: "",
+            showHerEverywhere = prefs[Keys.SHOW_HER_EVERYWHERE] ?: false,
+            reduceMotion = prefs[Keys.REDUCE_MOTION] ?: false,
+            listenOnAppOpen = prefs[Keys.LISTEN_ON_APP_OPEN] ?: false
         )
     }
 
@@ -123,6 +183,26 @@ class SettingsDataStore(private val context: Context) {
                 VoiceProviderType.OPENAI -> prefs[Keys.OPENAI_VOICE] = voiceId
                 VoiceProviderType.XAI -> prefs[Keys.XAI_VOICE] = voiceId
             }
+        }
+    }
+
+    suspend fun setGeminiLiveVoice(voice: GeminiLiveVoice) {
+        context.shailaDataStore.edit { it[Keys.GEMINI_LIVE_VOICE] = voice.voiceName }
+    }
+
+    suspend fun saveCustomElevenLabsVoices(voices: List<VoiceOption>) {
+        context.shailaDataStore.edit { prefs ->
+            prefs[Keys.CUSTOM_ELEVENLABS_VOICES] = encodeCustomVoices(voices.distinctBy { it.voiceId })
+        }
+    }
+
+    suspend fun addCustomElevenLabsVoice(voice: VoiceOption) {
+        context.shailaDataStore.edit { prefs ->
+            val current = parseCustomVoices(prefs[Keys.CUSTOM_ELEVENLABS_VOICES])
+            val updated = (listOf(voice.copy(isCustom = true)) + current).distinctBy { it.voiceId }
+            prefs[Keys.CUSTOM_ELEVENLABS_VOICES] = encodeCustomVoices(updated)
+            prefs[Keys.ELEVENLABS_VOICE] = voice.voiceId
+            prefs[Keys.VOICE_PROVIDER] = VoiceProviderType.ELEVENLABS.id
         }
     }
 
@@ -160,6 +240,53 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun setApkUpdateUrl(url: String) {
         context.shailaDataStore.edit { it[Keys.APK_UPDATE_URL] = url.trim() }
+    }
+
+    suspend fun setAssistantName(name: String) {
+        context.shailaDataStore.edit {
+            it[Keys.ASSISTANT_NAME] = name.trim().ifBlank { "Shaila" }
+        }
+    }
+
+    suspend fun setPersonalityPreset(preset: PersonalityPreset) {
+        context.shailaDataStore.edit { it[Keys.PERSONALITY_PRESET] = preset.id }
+    }
+
+    suspend fun setCustomPersonality(name: String, prompt: String) {
+        context.shailaDataStore.edit { prefs ->
+            prefs[Keys.CUSTOM_PERSONALITY_NAME] = name.trim()
+            prefs[Keys.CUSTOM_PERSONALITY_PROMPT] = prompt.trim()
+            prefs[Keys.PERSONALITY_PRESET] = PersonalityPreset.CUSTOM.id
+        }
+    }
+
+    suspend fun setResponseStyle(style: ResponseStyle) {
+        context.shailaDataStore.edit { it[Keys.RESPONSE_STYLE] = style.id }
+    }
+
+    suspend fun setHomeCharacterStyle(style: HomeCharacterStyle) {
+        context.shailaDataStore.edit { it[Keys.HOME_CHARACTER_STYLE] = style.id }
+    }
+
+    suspend fun setCustomCharacterUri(uri: String) {
+        context.shailaDataStore.edit { prefs ->
+            prefs[Keys.CUSTOM_CHARACTER_URI] = uri.trim()
+            if (uri.isNotBlank()) {
+                prefs[Keys.HOME_CHARACTER_STYLE] = HomeCharacterStyle.CUSTOM_GALLERY.id
+            }
+        }
+    }
+
+    suspend fun setShowHerEverywhere(enabled: Boolean) {
+        context.shailaDataStore.edit { it[Keys.SHOW_HER_EVERYWHERE] = enabled }
+    }
+
+    suspend fun setReduceMotion(enabled: Boolean) {
+        context.shailaDataStore.edit { it[Keys.REDUCE_MOTION] = enabled }
+    }
+
+    suspend fun setListenOnAppOpen(enabled: Boolean) {
+        context.shailaDataStore.edit { it[Keys.LISTEN_ON_APP_OPEN] = enabled }
     }
 
     suspend fun saveImageRegion(

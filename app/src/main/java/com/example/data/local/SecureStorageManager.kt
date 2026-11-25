@@ -14,6 +14,8 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 enum class ApiKeyType(val prefKey: String) {
+    GEMINI("key_gemini"),
+    GROQ("key_groq"),
     CLAUDE("key_claude"),
     ELEVENLABS("key_elevenlabs"),
     OPENAI("key_openai"),
@@ -21,11 +23,21 @@ enum class ApiKeyType(val prefKey: String) {
 }
 
 data class ApiKeysSnapshot(
+    val geminiKey: String = "",
+    val groqKey: String = "",
     val claudeKey: String = "",
     val elevenLabsKey: String = "",
     val openAiKey: String = "",
     val xaiKey: String = ""
-)
+) {
+    fun groqKeysList(): List<String> = groqKey
+        .split(",", "\n", ";")
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
+    fun hasAnyChatBrainKey(): Boolean =
+        geminiKey.isNotBlank() || groqKeysList().isNotEmpty() || claudeKey.isNotBlank()
+}
 
 class SecureStorageManager(context: Context) {
 
@@ -59,6 +71,8 @@ class SecureStorageManager(context: Context) {
     }
 
     private fun loadAllKeys(): ApiKeysSnapshot = ApiKeysSnapshot(
+        geminiKey = getKey(ApiKeyType.GEMINI),
+        groqKey = getKey(ApiKeyType.GROQ),
         claudeKey = getKey(ApiKeyType.CLAUDE),
         elevenLabsKey = getKey(ApiKeyType.ELEVENLABS),
         openAiKey = getKey(ApiKeyType.OPENAI),

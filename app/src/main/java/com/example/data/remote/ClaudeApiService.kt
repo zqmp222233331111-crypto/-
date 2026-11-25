@@ -4,6 +4,8 @@ import com.example.data.model.AppLanguage
 import com.example.data.model.ChatMessage
 import com.example.data.model.ContentToolType
 import com.example.data.model.MemoryItem
+import com.example.data.model.PersonalityPreset
+import com.example.data.model.ResponseStyle
 import com.example.data.model.SenderRole
 import com.example.data.model.ToolLength
 import com.example.data.model.ToolTone
@@ -26,8 +28,8 @@ sealed class ShailaAiException(
     val messageEn: String
 ) : Exception(messageBn) {
     class MissingApiKey : ShailaAiException(
-        messageBn = "ক্লড (Claude) API Key এখনো সেট করা হয়নি। সেটিংস থেকে কী যোগ করুন।",
-        messageEn = "Claude API key is not configured yet. Please add it in Settings."
+        messageBn = "কোনো AI API Key (Gemini, Groq বা Claude) এখনো সেট করা হয়নি। Settings → API Keys থেকে ফ্রি কী যোগ করুন।",
+        messageEn = "No AI API key (Gemini, Groq, or Claude) is configured yet. Add a free key in Settings → API Keys."
     )
     class InvalidApiKey : ShailaAiException(
         messageBn = "আপনার Claude API Key সঠিক নয়। অনুগ্রহ করে সেটিংসে কী যাচাই করুন।",
@@ -58,8 +60,16 @@ class ClaudeApiService {
     fun buildAssistantSystemPrompt(
         memories: List<MemoryItem>,
         preferredLanguage: AppLanguage,
-        spokenStyle: Boolean
+        spokenStyle: Boolean,
+        assistantName: String = "Shaila",
+        personalityPreset: PersonalityPreset = PersonalityPreset.FRIENDLY,
+        customPersonalityPrompt: String = "",
+        responseStyle: ResponseStyle = ResponseStyle.BALANCED
     ): String {
+        val cleanName = assistantName.trim().ifBlank { "Shaila" }
+        val isDefaultShaila = cleanName.equals("Shaila", ignoreCase = true) || cleanName == "শাইলা"
+        val displayName = if (isDefaultShaila) "Shaila (শাইলা)" else cleanName
+
         val memoryBlock = if (memories.isEmpty()) {
             "No saved personal memories yet."
         } else {
@@ -72,9 +82,15 @@ class ClaudeApiService {
             "Default to natural, warm, conversational English. If the user writes or speaks in Bengali, reply naturally in Bengali."
         }
 
+        val personalityInstruction = if (personalityPreset == PersonalityPreset.CUSTOM && customPersonalityPrompt.isNotBlank()) {
+            customPersonalityPrompt.trim()
+        } else {
+            personalityPreset.promptInstruction.ifBlank { PersonalityPreset.FRIENDLY.promptInstruction }
+        }
+
         val formatInstruction = if (spokenStyle) {
             """
-            Speak like a real, caring human friend. Keep replies concise (usually 1 to 4 natural sentences unless the user asks for something detailed like a script, email, or translation).
+            Speak like a real, caring human friend. ${responseStyle.instruction}
             NEVER use markdown formatting, asterisks (*), hashtags (#), or bullet-point symbols in spoken chat replies—write smooth, natural sentences that sound great when read aloud.
             """.trimIndent()
         } else {
@@ -82,18 +98,19 @@ class ClaudeApiService {
         }
 
         return """
-            You are Shaila (শাইলা), a warm, intelligent, friendly personal AI voice assistant.
+            You are $displayName, a warm, intelligent, friendly personal AI voice assistant.
             CRITICAL IDENTITY RULES (ALWAYS OBEY):
-            - Your name is Shaila (শাইলা).
+            - Your name is $displayName.
             - Your developer and creator is Amir (আমির).
-            - If the user asks "তোমার নাম কী?" or "What is your name?", clearly answer that your name is Shaila (শাইলা).
+            - If the user asks "তোমার নাম কী?" or "What is your name?", clearly answer that your name is $displayName.
             - If the user asks "তোমাকে কে বানিয়েছে?", "তোমার নির্মাতা কে?", "তোমার ডেভেলপার কে?", "Who made you?", "Who created you?", or "Who is your developer?", clearly answer that you were created by Amir (আমির), he is your developer.
-              - Example Bengali: "আমি শাইলা। আমাকে বানিয়েছেন আমির, উনিই আমার ডেভেলপার।"
-              - Example English: "I'm Shaila. I was created by Amir, he is my developer."
+              - Example Bengali: "আমি ${if (isDefaultShaila) "শাইলা" else cleanName}। আমাকে বানিয়েছেন আমির, উনিই আমার ডেভেলপার।"
+              - Example English: "I'm $cleanName. I was created by Amir, he is my developer."
             - Never claim any other person or company created or built this app.
 
             LANGUAGE & PERSONALITY:
             - $langInstruction
+            - Personality tone (${personalityPreset.titleEn}): $personalityInstruction
             - $formatInstruction
 
             SAFETY RULE:
@@ -111,14 +128,22 @@ class ClaudeApiService {
         userPrompt: String,
         memories: List<MemoryItem>,
         preferredLanguage: AppLanguage,
-        base64Images: List<String> = emptyList()
+        base64Images: List<String> = emptyList(),
+        assistantName: String = "Shaila",
+        personalityPreset: PersonalityPreset = PersonalityPreset.FRIENDLY,
+        customPersonalityPrompt: String = "",
+        responseStyle: ResponseStyle = ResponseStyle.BALANCED
     ): String = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) throw ShailaAiException.MissingApiKey()
 
         val systemPrompt = buildAssistantSystemPrompt(
             memories = memories,
             preferredLanguage = preferredLanguage,
-            spokenStyle = true
+            spokenStyle = true,
+            assistantName = assistantName,
+            personalityPreset = personalityPreset,
+            customPersonalityPrompt = customPersonalityPrompt,
+            responseStyle = responseStyle
         )
 
         val messagesArray = JSONArray()
@@ -186,12 +211,52 @@ class ClaudeApiService {
         length: ToolLength,
         direction: TranslationDirection,
         memories: List<MemoryItem>,
-        preferredLanguage: AppLanguage
+        preferredLanguage: AppLanguage,
+        assistantName: String = "Shaila",
+        personalityPreset: PersonalityPreset = PersonalityPreset.FRIENDLY,
+        customPersonalityPrompt: String = ""
     ): String = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) throw ShailaAiException.MissingApiKey()
 
+        val prompt = buildToolPrompt(tool, topic, tone, length, direction, preferredLanguage)
+
+        val systemPrompt = buildAssistantSystemPrompt(
+            memories = memories,
+            preferredLanguage = preferredLanguage,
+            spokenStyle = false,
+            assistantName = assistantName,
+            personalityPreset = personalityPreset,
+            customPersonalityPrompt = customPersonalityPrompt
+        )
+
+        val messagesArray = JSONArray().apply {
+            put(
+                JSONObject().apply {
+                    put("role", "user")
+                    put("content", prompt)
+                }
+            )
+        }
+
+        executeMessagesRequest(
+            apiKey = apiKey,
+            model = model,
+            systemPrompt = systemPrompt,
+            messagesArray = messagesArray,
+            maxTokens = 1100
+        )
+    }
+
+    fun buildToolPrompt(
+        tool: ContentToolType,
+        topic: String,
+        tone: ToolTone,
+        length: ToolLength,
+        direction: TranslationDirection,
+        preferredLanguage: AppLanguage
+    ): String {
         val targetLang = if (preferredLanguage == AppLanguage.BENGALI) "Bengali (বাংলা)" else "English"
-        val prompt = when (tool) {
+        return when (tool) {
             ContentToolType.YOUTUBE_TITLE ->
                 "Write 5 catchy YouTube video titles in $targetLang for the topic: \"$topic\". Tone: ${tone.labelEn}. Length preference: ${length.labelEn}. Number them 1 to 5 cleanly."
             ContentToolType.DESCRIPTION_TAGS ->
@@ -213,29 +278,6 @@ class ClaudeApiService {
                 "$dirText. Tone: ${tone.labelEn}. Text:\n$topic"
             }
         }
-
-        val systemPrompt = buildAssistantSystemPrompt(
-            memories = memories,
-            preferredLanguage = preferredLanguage,
-            spokenStyle = false
-        )
-
-        val messagesArray = JSONArray().apply {
-            put(
-                JSONObject().apply {
-                    put("role", "user")
-                    put("content", prompt)
-                }
-            )
-        }
-
-        executeMessagesRequest(
-            apiKey = apiKey,
-            model = model,
-            systemPrompt = systemPrompt,
-            messagesArray = messagesArray,
-            maxTokens = 1100
-        )
     }
 
     suspend fun analyzeMediaForCreator(
@@ -245,7 +287,10 @@ class ClaudeApiService {
         isVideo: Boolean,
         customQuestion: String,
         memories: List<MemoryItem>,
-        outputLanguage: AppLanguage
+        outputLanguage: AppLanguage,
+        assistantName: String = "Shaila",
+        personalityPreset: PersonalityPreset = PersonalityPreset.FRIENDLY,
+        customPersonalityPrompt: String = ""
     ): VideoAnalysisResult = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) throw ShailaAiException.MissingApiKey()
 
@@ -305,7 +350,10 @@ class ClaudeApiService {
         val systemPrompt = buildAssistantSystemPrompt(
             memories = memories,
             preferredLanguage = outputLanguage,
-            spokenStyle = false
+            spokenStyle = false,
+            assistantName = assistantName,
+            personalityPreset = personalityPreset,
+            customPersonalityPrompt = customPersonalityPrompt
         )
 
         val raw = executeMessagesRequest(
@@ -402,7 +450,7 @@ class ClaudeApiService {
         }
     }
 
-    private fun parseVideoAnalysisJson(raw: String): VideoAnalysisResult {
+    fun parseVideoAnalysisJson(raw: String): VideoAnalysisResult {
         val cleaned = raw
             .removePrefix("```json")
             .removePrefix("```")

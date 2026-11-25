@@ -39,6 +39,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Key
@@ -99,12 +100,14 @@ import com.example.R
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppSettings
 import com.example.data.model.ChatMessage
+import com.example.data.model.HomeCharacterStyle
 import com.example.data.model.ImageRegionRect
 import com.example.data.model.ImageRegionsConfig
 import com.example.data.model.SenderRole
 import com.example.ui.components.AnimatedVoiceOrb
-import com.example.ui.components.CroppedImage
 import com.example.ui.components.GlassCard
+import com.example.ui.components.LivingHalfBodyCharacter
+import com.example.ui.components.ShailaCharacterAvatar
 import com.example.ui.components.SoundWaveBar
 import com.example.ui.theme.AccentVioletBright
 import com.example.ui.theme.AccentVioletPrimary
@@ -123,6 +126,7 @@ fun HomeScreen(
     memoryCount: Int,
     orbState: OrbState,
     rmsLevel: Float,
+    speakingLevel: Float = 0f,
     partialTranscript: String,
     statusMessage: String?,
     activeVoiceSource: String?,
@@ -133,6 +137,7 @@ fun HomeScreen(
     onStartListening: () -> Unit,
     onStopListening: () -> Unit,
     onStopSpeaking: () -> Unit,
+    onStartLiveCall: () -> Unit = {},
     onSendMessage: (String) -> Unit,
     onSpeakMessage: (String) -> Unit,
     onSaveToMemory: (String) -> Unit,
@@ -152,6 +157,7 @@ fun HomeScreen(
 
     var textInput by rememberSaveable { mutableStateOf("") }
     var showMicPermissionDialog by remember { mutableStateOf(false) }
+    var pendingLiveCallPermission by remember { mutableStateOf(false) }
     var showMenuDropdown by remember { mutableStateOf(false) }
     val textInputFocusRequester = remember { FocusRequester() }
 
@@ -172,8 +178,14 @@ fun HomeScreen(
         micGranted = granted
         onUpdateMicPermission(granted)
         if (granted) {
-            onStartListening()
+            if (pendingLiveCallPermission) {
+                pendingLiveCallPermission = false
+                onStartLiveCall()
+            } else {
+                onStartListening()
+            }
         } else {
+            pendingLiveCallPermission = false
             showMicPermissionDialog = true
         }
     }
@@ -208,6 +220,9 @@ fun HomeScreen(
             .padding(horizontal = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        val isDefaultShaila = settings.assistantName.equals("Shaila", ignoreCase = true) ||
+            settings.assistantName == "শাইলা"
+
         // Top Bar: Menu left, "Shaila শাইলা" center, Gold Crown right
         Box(
             modifier = Modifier
@@ -263,18 +278,20 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Shaila",
+                    text = settings.assistantName,
                     fontFamily = ShailaScriptFont,
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
                     lineHeight = 28.sp
                 )
-                Text(
-                    text = "শাইলা",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (isDefaultShaila) {
+                    Text(
+                        text = "শাইলা",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             IconButton(
@@ -292,33 +309,224 @@ fun HomeScreen(
             }
         }
 
-        // Center Avatar inside glowing neon blue-purple ring + Sound wave + Greeting
+        val micCd = stringResource(R.string.cd_mic_button)
+        val usePortraitCharacter = settings.homeCharacterStyle != HomeCharacterStyle.CLASSIC_ORB
+        val bnDisplayName = if (isDefaultShaila) "শাইলা" else settings.assistantName
+
+        val micControlsRow: @Composable () -> Unit = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onToggleHoldToTalk(!settings.holdToTalkMode) }
+                        .padding(4.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (settings.holdToTalkMode) AccentVioletPrimary.copy(alpha = 0.45f) else ext.glassFill,
+                        border = BorderStroke(
+                            1.dp,
+                            if (settings.holdToTalkMode) AccentVioletBright else ext.glassBorder
+                        ),
+                        modifier = Modifier.size(46.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Filled.PanTool,
+                                contentDescription = "Hold to Talk",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = if (isBn) "চেপে ধরুন" else "Hold to Talk",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(74.dp)
+                        .shadow(14.dp, CircleShape, ambientColor = AccentVioletBright, spotColor = AccentVioletSecondary)
+                        .clip(CircleShape)
+                        .background(
+                            brush = Brush.linearGradient(
+                                colors = if (orbState == OrbState.LISTENING) {
+                                    listOf(MaterialTheme.colorScheme.error, AccentVioletPrimary)
+                                } else {
+                                    listOf(AccentVioletPrimary, AccentVioletBright)
+                                }
+                            )
+                        )
+                        .border(2.dp, Color.White.copy(alpha = 0.42f), CircleShape)
+                        .testTag("mic_button")
+                        .semantics { contentDescription = micCd }
+                        .pointerInput(settings.holdToTalkMode, micGranted, orbState) {
+                            detectTapGestures(
+                                onTap = {
+                                    if (!settings.holdToTalkMode) {
+                                        triggerMicAction()
+                                    }
+                                },
+                                onPress = {
+                                    if (settings.holdToTalkMode) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        if (!micGranted) {
+                                            showMicPermissionDialog = true
+                                        } else {
+                                            onStartListening()
+                                            tryAwaitRelease()
+                                            onStopListening()
+                                        }
+                                    }
+                                }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (settings.showHerEverywhere) {
+                        ShailaCharacterAvatar(
+                            homeCharacterStyle = settings.homeCharacterStyle,
+                            customCharacterUri = settings.customCharacterUri,
+                            fallbackAvatarRegion = imageRegions.avatarFace,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            borderColor = Color.Transparent
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    if (orbState == OrbState.LISTENING) {
+                                        MaterialTheme.colorScheme.error.copy(alpha = 0.42f)
+                                    } else {
+                                        Color(0x55120A28)
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (orbState == OrbState.LISTENING) Icons.Filled.Stop else Icons.Filled.Mic,
+                                contentDescription = micCd,
+                                tint = Color.White,
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                    } else {
+                        Icon(
+                            imageVector = if (orbState == OrbState.LISTENING) Icons.Filled.Stop else Icons.Filled.Mic,
+                            contentDescription = micCd,
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                }
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            if (orbState == OrbState.SPEAKING) {
+                                onStopSpeaking()
+                            } else {
+                                textInputFocusRequester.requestFocus()
+                            }
+                        }
+                        .padding(4.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = ext.glassFill,
+                        border = BorderStroke(1.dp, ext.glassBorder),
+                        modifier = Modifier.size(46.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (orbState == OrbState.SPEAKING) Icons.Filled.Stop else Icons.Filled.Keyboard,
+                                contentDescription = "Type",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = if (orbState == OrbState.SPEAKING) {
+                            if (isBn) "থামান" else "Stop"
+                        } else {
+                            if (isBn) "লিখুন" else "Type"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // Center Character / Avatar + Sound wave + Greeting + Live Call CTA
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 680.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            AnimatedVoiceOrb(
-                orbState = orbState,
-                rmsLevel = rmsLevel,
-                avatarRegion = imageRegions.avatarFace,
-                orbSize = 176.dp,
-                onClick = triggerMicAction
-            )
+            if (usePortraitCharacter) {
+                val heroHeight = if (messages.isEmpty()) 258.dp else 192.dp
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(heroHeight),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    LivingHalfBodyCharacter(
+                        homeCharacterStyle = settings.homeCharacterStyle,
+                        customCharacterUri = settings.customCharacterUri,
+                        orbState = orbState,
+                        rmsLevel = rmsLevel,
+                        speakingLevel = speakingLevel,
+                        reduceMotion = settings.reduceMotion,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 34.dp),
+                        onClick = triggerMicAction
+                    )
+                    Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+                        micControlsRow()
+                    }
+                }
+            } else {
+                AnimatedVoiceOrb(
+                    orbState = orbState,
+                    rmsLevel = rmsLevel,
+                    speakingLevel = speakingLevel,
+                    avatarRegion = imageRegions.avatarFace,
+                    orbSize = if (messages.isEmpty()) 172.dp else 142.dp,
+                    onClick = triggerMicAction
+                )
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
 
             SoundWaveBar(
                 orbState = orbState,
-                rmsLevel = rmsLevel
+                rmsLevel = if (orbState == OrbState.SPEAKING) speakingLevel else rmsLevel
             )
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
 
             Text(
                 text = when (orbState) {
                     OrbState.LISTENING -> if (isBn) "মন দিয়ে শুনছি..." else "Listening..."
-                    OrbState.THINKING -> if (isBn) "শাইলা ভাবছে..." else "Thinking..."
-                    OrbState.SPEAKING -> if (isBn) "শাইলা বলছে..." else "Speaking..."
+                    OrbState.THINKING -> if (isBn) "$bnDisplayName ভাবছে..." else "${settings.assistantName} is thinking..."
+                    OrbState.SPEAKING -> if (isBn) "$bnDisplayName বলছে..." else "${settings.assistantName} is speaking..."
                     OrbState.IDLE -> greetingText
                 },
                 style = MaterialTheme.typography.titleMedium,
@@ -332,6 +540,57 @@ fun HomeScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.secondary
                 )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Prominent Real-Time Live Voice Call pill
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = Color.Transparent,
+                border = BorderStroke(
+                    1.2.dp,
+                    Brush.linearGradient(listOf(AccentVioletSecondary, AccentVioletBright))
+                ),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                AccentVioletPrimary.copy(alpha = 0.42f),
+                                AccentVioletSecondary.copy(alpha = 0.28f)
+                            )
+                        )
+                    )
+                    .testTag("start_live_call_button")
+                    .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        if (!micGranted) {
+                            pendingLiveCallPermission = true
+                            showMicPermissionDialog = true
+                        } else {
+                            onStartLiveCall()
+                        }
+                    }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Call,
+                        contentDescription = if (isBn) "লাইভ কল" else "Live Call",
+                        tint = AccentVioletSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = if (isBn) "${bnDisplayName}-এর সাথে লাইভ কথা বলুন" else "Live Call with ${settings.assistantName}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
             // Live partial transcript pill
@@ -360,134 +619,9 @@ fun HomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Hold to Talk (Left) | Big Purple Gradient Mic Button (Center) | Type (Right)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(24.dp)
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable { onToggleHoldToTalk(!settings.holdToTalkMode) }
-                        .padding(6.dp)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = if (settings.holdToTalkMode) AccentVioletPrimary.copy(alpha = 0.4f) else ext.glassFill,
-                        border = BorderStroke(
-                            1.dp,
-                            if (settings.holdToTalkMode) AccentVioletBright else ext.glassBorder
-                        ),
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Filled.PanTool,
-                                contentDescription = "Hold to Talk",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (isBn) "চেপে ধরুন" else "Hold to Talk",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                val micCd = stringResource(R.string.cd_mic_button)
-                Box(
-                    modifier = Modifier
-                        .size(76.dp)
-                        .shadow(14.dp, CircleShape, ambientColor = AccentVioletBright, spotColor = AccentVioletSecondary)
-                        .clip(CircleShape)
-                        .background(
-                            brush = Brush.linearGradient(
-                                colors = if (orbState == OrbState.LISTENING) {
-                                    listOf(MaterialTheme.colorScheme.error, AccentVioletPrimary)
-                                } else {
-                                    listOf(AccentVioletPrimary, AccentVioletBright)
-                                }
-                            )
-                        )
-                        .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape)
-                        .testTag("mic_button")
-                        .semantics { contentDescription = micCd }
-                        .pointerInput(settings.holdToTalkMode, micGranted, orbState) {
-                            detectTapGestures(
-                                onTap = {
-                                    if (!settings.holdToTalkMode) {
-                                        triggerMicAction()
-                                    }
-                                },
-                                onPress = {
-                                    if (settings.holdToTalkMode) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        if (!micGranted) {
-                                            showMicPermissionDialog = true
-                                        } else {
-                                            onStartListening()
-                                            tryAwaitRelease()
-                                            onStopListening()
-                                        }
-                                    }
-                                }
-                            )
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (orbState == OrbState.LISTENING) Icons.Filled.Stop else Icons.Filled.Mic,
-                        contentDescription = micCd,
-                        tint = Color.White,
-                        modifier = Modifier.size(34.dp)
-                    )
-                }
-
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable {
-                            if (orbState == OrbState.SPEAKING) {
-                                onStopSpeaking()
-                            } else {
-                                textInputFocusRequester.requestFocus()
-                            }
-                        }
-                        .padding(6.dp)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = ext.glassFill,
-                        border = BorderStroke(1.dp, ext.glassBorder),
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = if (orbState == OrbState.SPEAKING) Icons.Filled.Stop else Icons.Filled.Keyboard,
-                                contentDescription = "Type",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (orbState == OrbState.SPEAKING) {
-                            if (isBn) "থামান" else "Stop"
-                        } else {
-                            if (isBn) "লিখুন" else "Type"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+            if (!usePortraitCharacter) {
+                Spacer(modifier = Modifier.height(6.dp))
+                micControlsRow()
             }
         }
 
@@ -590,6 +724,7 @@ fun HomeScreen(
                 items(messages, key = { it.id }) { msg ->
                     ChatBubbleItem(
                         message = msg,
+                        settings = settings,
                         avatarRegion = imageRegions.avatarFace,
                         isBn = isBn,
                         onSpeak = { onSpeakMessage(msg.text) },
@@ -751,6 +886,7 @@ fun HomeScreen(
 @Composable
 private fun ChatBubbleItem(
     message: ChatMessage,
+    settings: AppSettings,
     avatarRegion: ImageRegionRect,
     isBn: Boolean,
     onSpeak: () -> Unit,
@@ -766,14 +902,16 @@ private fun ChatBubbleItem(
         verticalAlignment = Alignment.Bottom
     ) {
         if (!isUser) {
-            CroppedImage(
-                region = avatarRegion,
-                contentDescription = "Shaila avatar",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .border(1.dp, AccentVioletBright, CircleShape)
+            ShailaCharacterAvatar(
+                homeCharacterStyle = if (settings.showHerEverywhere || settings.homeCharacterStyle != HomeCharacterStyle.CLASSIC_ORB) {
+                    settings.homeCharacterStyle
+                } else {
+                    HomeCharacterStyle.CLASSIC_ORB
+                },
+                customCharacterUri = settings.customCharacterUri,
+                fallbackAvatarRegion = avatarRegion,
+                contentDescription = "${settings.assistantName} avatar",
+                modifier = Modifier.size(32.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
         }

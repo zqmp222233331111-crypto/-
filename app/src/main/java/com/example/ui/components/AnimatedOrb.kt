@@ -29,9 +29,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -51,12 +53,13 @@ import kotlin.math.sin
 fun AnimatedVoiceOrb(
     orbState: OrbState,
     rmsLevel: Float,
+    speakingLevel: Float = 0f,
     avatarRegion: ImageRegionRect? = null,
     modifier: Modifier = Modifier,
     orbSize: Dp = 196.dp,
     onClick: () -> Unit = {}
 ) {
-    val ext = LocalShailaColors.current
+    LocalShailaColors.current
     val orbDescription = stringResource(R.string.cd_orb)
     val transition = rememberInfiniteTransition(label = "orb_transition")
 
@@ -90,10 +93,36 @@ fun AnimatedVoiceOrb(
         label = "ripple"
     )
 
+    val blinkClock by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 4200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "blink_clock"
+    )
+
     val animatedRms by animateFloatAsState(
         targetValue = if (orbState == OrbState.LISTENING) rmsLevel else 0f,
         animationSpec = spring(dampingRatio = 0.65f, stiffness = 320f),
         label = "rms_anim"
+    )
+
+    val speechWaveFallback = if (orbState == OrbState.SPEAKING) {
+        0.22f + 0.18f * kotlin.math.abs(sin(rippleProgress * Math.PI * 6)).toFloat()
+    } else {
+        0f
+    }
+    val targetSpeak = if (orbState == OrbState.SPEAKING || speakingLevel > 0.04f) {
+        speakingLevel.coerceAtLeast(speechWaveFallback).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val animatedSpeaking by animateFloatAsState(
+        targetValue = targetSpeak,
+        animationSpec = spring(dampingRatio = 0.58f, stiffness = 460f),
+        label = "speak_anim"
     )
 
     val primary = AccentVioletPrimary
@@ -122,7 +151,7 @@ fun AnimatedVoiceOrb(
                 OrbState.IDLE -> breathe
                 OrbState.LISTENING -> 1.0f + animatedRms * 0.14f + (breathe - 1f) * 0.4f
                 OrbState.THINKING -> 0.99f + (breathe - 1f) * 0.25f
-                OrbState.SPEAKING -> 1.02f + sin(rippleProgress * Math.PI * 2).toFloat() * 0.05f
+                OrbState.SPEAKING -> 1.02f + animatedSpeaking * 0.07f + sin(rippleProgress * Math.PI * 2).toFloat() * 0.02f
             }
             val ringRadius = avatarRadius * dynamicScale
 
@@ -130,8 +159,8 @@ fun AnimatedVoiceOrb(
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        neonBlue.copy(alpha = if (orbState == OrbState.IDLE) 0.34f else 0.52f),
-                        brightPurple.copy(alpha = 0.22f),
+                        neonBlue.copy(alpha = if (orbState == OrbState.IDLE) 0.34f else 0.55f),
+                        brightPurple.copy(alpha = 0.24f),
                         Color.Transparent
                     ),
                     center = center,
@@ -163,7 +192,7 @@ fun AnimatedVoiceOrb(
                 for (i in 0 until 3) {
                     val phase = (rippleProgress + i / 3f) % 1f
                     val r = ringRadius + (maxRadius - ringRadius) * phase
-                    val alpha = (1f - phase) * 0.7f
+                    val alpha = (1f - phase) * (0.45f + 0.35f * animatedSpeaking)
                     drawCircle(
                         brush = Brush.sweepGradient(
                             colors = listOf(neonBlue.copy(alpha = alpha), brightPurple.copy(alpha = alpha), neonBlue.copy(alpha = alpha)),
@@ -209,22 +238,122 @@ fun AnimatedVoiceOrb(
             }
         }
 
-        // Circular avatarFace cropped from the single collage asset
+        // Circular avatarFace cropped from the single collage asset with subtle head motion + 2D lip-sync
         val avatarDiameter = orbSize * 0.66f
         if (avatarRegion != null) {
-            CroppedImage(
-                region = avatarRegion,
-                contentDescription = orbDescription,
-                contentScale = ContentScale.Crop,
+            val headScale = if (orbState == OrbState.SPEAKING) {
+                1.0f + animatedSpeaking * 0.032f
+            } else {
+                0.985f + (breathe - 0.96f) * 0.25f
+            }
+            val headTilt = if (orbState == OrbState.SPEAKING) {
+                sin(rippleProgress * Math.PI * 2).toFloat() * (1.2f * animatedSpeaking)
+            } else {
+                0f
+            }
+            val blinkAmount = if (blinkClock in 0.93f..0.97f) {
+                1f - kotlin.math.abs(blinkClock - 0.95f) / 0.02f
+            } else {
+                0f
+            }
+
+            Box(
                 modifier = Modifier
                     .size(avatarDiameter)
+                    .graphicsLayer {
+                        scaleX = headScale
+                        scaleY = headScale
+                        rotationZ = headTilt
+                    }
                     .clip(CircleShape)
                     .border(
                         width = 2.dp,
                         brush = Brush.linearGradient(listOf(neonBlue, brightPurple)),
                         shape = CircleShape
                     )
-            )
+            ) {
+                CroppedImage(
+                    region = avatarRegion,
+                    contentDescription = orbDescription,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(avatarDiameter)
+                )
+
+                // Facial life overlay: natural periodic blink + speech-reactive lip-sync mouth
+                Canvas(modifier = Modifier.size(avatarDiameter)) {
+                    // 1. Subtle natural blink
+                    if (blinkAmount > 0.08f) {
+                        val lidAlpha = 0.62f * blinkAmount
+                        val eyeY = size.height * 0.425f
+                        val eyeW = size.width * 0.115f
+                        val eyeH = size.height * 0.048f * blinkAmount
+                        drawOval(
+                            color = Color(0xFFEEC5B4).copy(alpha = lidAlpha),
+                            topLeft = Offset(size.width * 0.34f, eyeY - eyeH / 2f),
+                            size = Size(eyeW, eyeH)
+                        )
+                        drawOval(
+                            color = Color(0xFFEEC5B4).copy(alpha = lidAlpha),
+                            topLeft = Offset(size.width * 0.545f, eyeY - eyeH / 2f),
+                            size = Size(eyeW, eyeH)
+                        )
+                    }
+
+                    // 2. Dynamic Lip-Sync Mouth Overlay synchronized to speakingLevel
+                    if (animatedSpeaking > 0.03f) {
+                        val mouthCenterX = size.width * 0.505f
+                        val mouthCenterY = size.height * 0.652f
+                        val mouthWidth = size.width * (0.105f + animatedSpeaking * 0.032f)
+                        val mouthHeight = size.height * (0.014f + animatedSpeaking * 0.062f)
+
+                        // Soft warm lower-lip contour glow
+                        drawOval(
+                            color = Color(0xFFD56B84).copy(alpha = 0.70f),
+                            topLeft = Offset(
+                                mouthCenterX - mouthWidth * 0.58f,
+                                mouthCenterY - mouthHeight * 0.58f
+                            ),
+                            size = Size(mouthWidth * 1.16f, mouthHeight * 1.24f)
+                        )
+
+                        // Open mouth cavity shaped naturally like curved lips
+                        val path = Path().apply {
+                            moveTo(mouthCenterX - mouthWidth / 2f, mouthCenterY)
+                            quadraticTo(
+                                mouthCenterX,
+                                mouthCenterY - mouthHeight * 0.65f,
+                                mouthCenterX + mouthWidth / 2f,
+                                mouthCenterY
+                            )
+                            quadraticTo(
+                                mouthCenterX,
+                                mouthCenterY + mouthHeight * 0.85f,
+                                mouthCenterX - mouthWidth / 2f,
+                                mouthCenterY
+                            )
+                            close()
+                        }
+                        drawPath(
+                            path = path,
+                            color = Color(0xFF4B1328).copy(alpha = 0.88f)
+                        )
+
+                        // Subtle upper-teeth glint when mouth opens wider
+                        if (animatedSpeaking > 0.36f) {
+                            val teethAlpha = ((animatedSpeaking - 0.36f) * 1.2f).coerceIn(0f, 0.72f)
+                            drawRoundRect(
+                                color = Color(0xFFFFF5F5).copy(alpha = teethAlpha),
+                                topLeft = Offset(
+                                    mouthCenterX - mouthWidth * 0.28f,
+                                    mouthCenterY - mouthHeight * 0.24f
+                                ),
+                                size = Size(mouthWidth * 0.56f, mouthHeight * 0.24f),
+                                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

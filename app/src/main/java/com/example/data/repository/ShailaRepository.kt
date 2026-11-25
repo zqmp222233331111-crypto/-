@@ -16,15 +16,21 @@ import com.example.data.model.AppSettings
 import com.example.data.model.ChatMessage
 import com.example.data.model.ContentToolType
 import com.example.data.model.GalleryMediaItem
+import com.example.data.model.GeminiLiveVoice
+import com.example.data.model.HomeCharacterStyle
 import com.example.data.model.MemoryItem
+import com.example.data.model.PersonalityPreset
+import com.example.data.model.ResponseStyle
 import com.example.data.model.SenderRole
 import com.example.data.model.SpeechLanguage
 import com.example.data.model.ToolLength
 import com.example.data.model.ToolTone
 import com.example.data.model.TranslationDirection
 import com.example.data.model.VideoAnalysisResult
+import com.example.data.model.VoiceOption
 import com.example.data.model.VoiceProviderType
 import com.example.data.remote.ClaudeApiService
+import com.example.data.remote.GroqAndGeminiRestService
 import com.example.data.remote.ShailaAiException
 import com.example.data.remote.SpeakOutcome
 import com.example.data.remote.VoiceEngine
@@ -40,7 +46,8 @@ class ShailaRepository(
     private val secureStorage: SecureStorageManager,
     private val claudeService: ClaudeApiService,
     val voiceEngine: VoiceEngine,
-    val frameExtractor: VideoFrameExtractor
+    val frameExtractor: VideoFrameExtractor,
+    private val restService: GroqAndGeminiRestService = GroqAndGeminiRestService()
 ) {
     val settingsFlow: Flow<AppSettings> = settingsStore.settingsFlow
     val imageRegionsFlow: Flow<com.example.data.model.ImageRegionsConfig> = settingsStore.imageRegionsFlow
@@ -90,7 +97,15 @@ class ShailaRepository(
         return creatorQueries.any { lower.contains(it) }
     }
 
-    fun localIdentityReply(text: String, language: AppLanguage): String {
+    fun localIdentityReply(
+        text: String,
+        language: AppLanguage,
+        assistantName: String = "Shaila"
+    ): String {
+        val cleanName = assistantName.trim().ifBlank { "Shaila" }
+        val isDefaultShaila = cleanName.equals("Shaila", ignoreCase = true) || cleanName == "শাইলা"
+        val bnName = if (isDefaultShaila) "শাইলা" else cleanName
+        val enName = if (isDefaultShaila) "Shaila" else cleanName
         val lower = text.lowercase()
         val asksCreator = lower.contains("বানিয়ে") || lower.contains("নির্মাতা") ||
             lower.contains("ডেভেলপার") || lower.contains("made") ||
@@ -100,16 +115,49 @@ class ShailaRepository(
 
         return if (asksCreator) {
             if (isEnglish) {
-                "I'm Shaila. I was created by Amir, he is my developer."
+                "I'm $enName. I was created by Amir, he is my developer."
             } else {
-                "আমি শাইলা। আমাকে বানিয়েছেন আমির, উনিই আমার ডেভেলপার।"
+                "আমি $bnName। আমাকে বানিয়েছেন আমির, উনিই আমার ডেভেলপার।"
             }
         } else {
             if (isEnglish) {
-                "My name is Shaila, your personal AI assistant created by Amir."
+                "My name is $enName, your personal AI assistant created by Amir."
             } else {
-                "আমার নাম শাইলা। আমি আপনার ব্যক্তিগত এআই সহকারী, আমাকে বানিয়েছেন আমির।"
+                "আমার নাম $bnName। আমি আপনার ব্যক্তিগত এআই সহকারী, আমাকে বানিয়েছেন আমির।"
             }
+        }
+    }
+
+    suspend fun buildLiveSystemPrompt(): String {
+        val settings = settingsFlow.first()
+        val memories = database.memoryDao().getAllMemories()
+        val base = claudeService.buildAssistantSystemPrompt(
+            memories = memories,
+            preferredLanguage = settings.appLanguage,
+            spokenStyle = true,
+            assistantName = settings.assistantName,
+            personalityPreset = settings.personalityPreset,
+            customPersonalityPrompt = settings.customPersonalityPrompt,
+            responseStyle = settings.responseStyle
+        )
+        return """
+            $base
+
+            LIVE VOICE CALL MODE:
+            - You are currently in a live real-time voice phone call with the user.
+            - Respond warmly, naturally, and concisely (1-3 spoken sentences at a time) without bullet points or formatting.
+            - Use natural conversational emotion suitable for a friendly female companion assistant.
+        """.trimIndent()
+    }
+
+    suspend fun saveLiveConversationTurn(userText: String, assistantText: String) {
+        val u = userText.trim()
+        val a = assistantText.trim()
+        if (u.isNotEmpty()) {
+            database.chatDao().insertMessage(ChatMessage(role = SenderRole.USER, text = u))
+        }
+        if (a.isNotEmpty()) {
+            database.chatDao().insertMessage(ChatMessage(role = SenderRole.ASSISTANT, text = a))
         }
     }
 
@@ -119,7 +167,10 @@ class ShailaRepository(
         isVideo: Boolean = false
     ): Result<ChatMessage> {
         val settings = settingsFlow.first()
-        val claudeKey = secureStorage.getKey(ApiKeyType.CLAUDE)
+        val keys = secureStorage.keysState.value
+        val claudeKey = keys.claudeKey.ifBlank { secureStorage.getKey(ApiKeyType.CLAUDE) }
+        val groqKeys = keys.groqKeysList()
+        val geminiKey = keys.geminiKey.ifBlank { secureStorage.getKey(ApiKeyType.GEMINI) }
 
         val userMsg = ChatMessage(
             role = SenderRole.USER,
@@ -129,10 +180,8 @@ class ShailaRepository(
         )
         database.chatDao().insertMessage(userMsg)
 
-        // If the user asks Shaila's identity/creator and Claude key isn't configured yet,
-        // answer cleanly with Shaila/Amir identity rather than blocking on a key error.
-        if (claudeKey.isBlank() && isIdentityQuestion(userText)) {
-            val reply = localIdentityReply(userText, settings.appLanguage)
+        if (claudeKey.isBlank() && groqKeys.isEmpty() && geminiKey.isBlank() && isIdentityQuestion(userText)) {
+            val reply = localIdentityReply(userText, settings.appLanguage, settings.assistantName)
             val saved = ChatMessage(role = SenderRole.ASSISTANT, text = reply)
             database.chatDao().insertMessage(saved)
             return Result.success(saved)
@@ -151,15 +200,53 @@ class ShailaRepository(
                 emptyList()
             }
 
-            val replyText = claudeService.sendConversation(
-                apiKey = claudeKey,
-                model = settings.claudeModel,
-                history = history.dropLast(1),
-                userPrompt = userText,
+            val systemPrompt = claudeService.buildAssistantSystemPrompt(
                 memories = memories,
                 preferredLanguage = settings.appLanguage,
-                base64Images = imagesBase64
+                spokenStyle = true,
+                assistantName = settings.assistantName,
+                personalityPreset = settings.personalityPreset,
+                customPersonalityPrompt = settings.customPersonalityPrompt,
+                responseStyle = settings.responseStyle
             )
+
+            val replyText = when {
+                claudeKey.isNotBlank() -> claudeService.sendConversation(
+                    apiKey = claudeKey,
+                    model = settings.claudeModel,
+                    history = history.dropLast(1),
+                    userPrompt = userText,
+                    memories = memories,
+                    preferredLanguage = settings.appLanguage,
+                    base64Images = imagesBase64,
+                    assistantName = settings.assistantName,
+                    personalityPreset = settings.personalityPreset,
+                    customPersonalityPrompt = settings.customPersonalityPrompt,
+                    responseStyle = settings.responseStyle
+                )
+                imagesBase64.isNotEmpty() && geminiKey.isNotBlank() -> restService.sendGeminiRestConversation(
+                    apiKey = geminiKey,
+                    systemPrompt = systemPrompt,
+                    history = history.dropLast(1),
+                    userPrompt = userText,
+                    base64Images = imagesBase64
+                )
+                groqKeys.isNotEmpty() -> restService.sendGroqConversation(
+                    keys = groqKeys,
+                    systemPrompt = systemPrompt,
+                    history = history.dropLast(1),
+                    userPrompt = userText
+                )
+                geminiKey.isNotBlank() -> restService.sendGeminiRestConversation(
+                    apiKey = geminiKey,
+                    systemPrompt = systemPrompt,
+                    history = history.dropLast(1),
+                    userPrompt = userText,
+                    base64Images = imagesBase64
+                )
+                else -> throw ShailaAiException.MissingApiKey()
+            }
+
             val saved = ChatMessage(role = SenderRole.ASSISTANT, text = replyText)
             val rowId = database.chatDao().insertMessage(saved)
             Result.success(saved.copy(id = rowId))
@@ -184,6 +271,35 @@ class ShailaRepository(
         return voiceEngine.previewVoice(provider, voiceId, settings)
     }
 
+    suspend fun fetchMyElevenLabsVoices(): Result<List<VoiceOption>> {
+        val key = secureStorage.getKey(ApiKeyType.ELEVENLABS)
+        val res = voiceEngine.elevenLabs.fetchMyVoices(key)
+        res.onSuccess { voices ->
+            if (voices.isNotEmpty()) {
+                settingsStore.saveCustomElevenLabsVoices(voices)
+            }
+        }
+        return res
+    }
+
+    suspend fun addCustomElevenLabsVoice(voiceId: String, name: String): Result<VoiceOption> {
+        val cleanId = voiceId.trim()
+        if (cleanId.isBlank()) {
+            return Result.failure(IllegalArgumentException("Voice ID দিন।"))
+        }
+        val cleanName = name.trim().ifBlank { "Custom Female Voice" }
+        val option = VoiceOption(
+            voiceId = cleanId,
+            name = cleanName,
+            descriptionBn = "কাস্টম ElevenLabs কণ্ঠ ($cleanId)",
+            descriptionEn = "Custom ElevenLabs voice ($cleanId)",
+            provider = VoiceProviderType.ELEVENLABS,
+            isCustom = true
+        )
+        settingsStore.addCustomElevenLabsVoice(option)
+        return Result.success(option)
+    }
+
     suspend fun generateToolContent(
         tool: ContentToolType,
         topic: String,
@@ -192,20 +308,58 @@ class ShailaRepository(
         direction: TranslationDirection
     ): Result<String> {
         val settings = settingsFlow.first()
-        val claudeKey = secureStorage.getKey(ApiKeyType.CLAUDE)
+        val keys = secureStorage.keysState.value
+        val claudeKey = keys.claudeKey.ifBlank { secureStorage.getKey(ApiKeyType.CLAUDE) }
+        val groqKeys = keys.groqKeysList()
+        val geminiKey = keys.geminiKey.ifBlank { secureStorage.getKey(ApiKeyType.GEMINI) }
         val memories = database.memoryDao().getAllMemories()
+        val systemPrompt = claudeService.buildAssistantSystemPrompt(
+            memories = memories,
+            preferredLanguage = settings.appLanguage,
+            spokenStyle = false,
+            assistantName = settings.assistantName,
+            personalityPreset = settings.personalityPreset,
+            customPersonalityPrompt = settings.customPersonalityPrompt
+        )
+        val prompt = claudeService.buildToolPrompt(
+            tool = tool,
+            topic = topic,
+            tone = tone,
+            length = length,
+            direction = direction,
+            preferredLanguage = settings.appLanguage
+        )
+
         return try {
-            val output = claudeService.generateToolContent(
-                apiKey = claudeKey,
-                model = settings.claudeModel,
-                tool = tool,
-                topic = topic,
-                tone = tone,
-                length = length,
-                direction = direction,
-                memories = memories,
-                preferredLanguage = settings.appLanguage
-            )
+            val output = when {
+                claudeKey.isNotBlank() -> claudeService.generateToolContent(
+                    apiKey = claudeKey,
+                    model = settings.claudeModel,
+                    tool = tool,
+                    topic = topic,
+                    tone = tone,
+                    length = length,
+                    direction = direction,
+                    memories = memories,
+                    preferredLanguage = settings.appLanguage,
+                    assistantName = settings.assistantName,
+                    personalityPreset = settings.personalityPreset,
+                    customPersonalityPrompt = settings.customPersonalityPrompt
+                )
+                groqKeys.isNotEmpty() -> restService.sendGroqConversation(
+                    keys = groqKeys,
+                    systemPrompt = systemPrompt,
+                    history = emptyList(),
+                    userPrompt = prompt
+                )
+                geminiKey.isNotBlank() -> restService.sendGeminiRestConversation(
+                    apiKey = geminiKey,
+                    systemPrompt = systemPrompt,
+                    history = emptyList(),
+                    userPrompt = prompt
+                )
+                else -> throw ShailaAiException.MissingApiKey()
+            }
             Result.success(output)
         } catch (e: Exception) {
             Result.failure(e)
@@ -224,7 +378,9 @@ class ShailaRepository(
         preExtractedFrames: List<ExtractedFrame> = emptyList()
     ): Result<VideoAnalysisResult> {
         val settings = settingsFlow.first()
-        val claudeKey = secureStorage.getKey(ApiKeyType.CLAUDE)
+        val keys = secureStorage.keysState.value
+        val claudeKey = keys.claudeKey.ifBlank { secureStorage.getKey(ApiKeyType.CLAUDE) }
+        val geminiKey = keys.geminiKey.ifBlank { secureStorage.getKey(ApiKeyType.GEMINI) }
         val memories = database.memoryDao().getAllMemories()
 
         val framesBase64 = if (isVideo) {
@@ -244,15 +400,57 @@ class ShailaRepository(
         }
 
         return try {
-            val result = claudeService.analyzeMediaForCreator(
-                apiKey = claudeKey,
-                model = settings.claudeModel,
-                base64Frames = framesBase64,
-                isVideo = isVideo,
-                customQuestion = customQuestion,
-                memories = memories,
-                outputLanguage = outputLanguage
-            )
+            val result = when {
+                claudeKey.isNotBlank() -> claudeService.analyzeMediaForCreator(
+                    apiKey = claudeKey,
+                    model = settings.claudeModel,
+                    base64Frames = framesBase64,
+                    isVideo = isVideo,
+                    customQuestion = customQuestion,
+                    memories = memories,
+                    outputLanguage = outputLanguage,
+                    assistantName = settings.assistantName,
+                    personalityPreset = settings.personalityPreset,
+                    customPersonalityPrompt = settings.customPersonalityPrompt
+                )
+                geminiKey.isNotBlank() -> {
+                    val langName = if (outputLanguage == AppLanguage.BENGALI) "Bengali (বাংলা)" else "English"
+                    val mediaKind = if (isVideo) "video (${framesBase64.size} frames)" else "photo"
+                    val reqText = if (customQuestion.isNotBlank()) {
+                        "User request about this $mediaKind: \"$customQuestion\".\nAlso generate creator metadata in $langName."
+                    } else {
+                        "Describe this $mediaKind and generate YouTube/social creator metadata in $langName."
+                    }
+                    val jsonPrompt = """
+                        $reqText
+                        Return ONLY valid JSON with these exact string keys:
+                        {
+                          "summary": "Brief natural answer/description of what is shown",
+                          "title": "Catchy YouTube/Video title",
+                          "description": "Engaging video/photo description",
+                          "tags": "comma, separated, relevant, tags",
+                          "caption": "Ready-to-post Facebook/Instagram caption with a few hashtags"
+                        }
+                    """.trimIndent()
+                    val systemPrompt = claudeService.buildAssistantSystemPrompt(
+                        memories = memories,
+                        preferredLanguage = outputLanguage,
+                        spokenStyle = false,
+                        assistantName = settings.assistantName,
+                        personalityPreset = settings.personalityPreset,
+                        customPersonalityPrompt = settings.customPersonalityPrompt
+                    )
+                    val raw = restService.sendGeminiRestConversation(
+                        apiKey = geminiKey,
+                        systemPrompt = systemPrompt,
+                        history = emptyList(),
+                        userPrompt = jsonPrompt,
+                        base64Images = framesBase64
+                    )
+                    claudeService.parseVideoAnalysisJson(raw)
+                }
+                else -> throw ShailaAiException.MissingApiKey()
+            }
             Result.success(result)
         } catch (e: Exception) {
             Result.failure(e)
@@ -303,6 +501,8 @@ class ShailaRepository(
     suspend fun testApiKey(type: ApiKeyType, keyInput: String): Result<String> {
         val settings = settingsFlow.first()
         return when (type) {
+            ApiKeyType.GEMINI -> restService.testGeminiKey(keyInput)
+            ApiKeyType.GROQ -> restService.testGroqKeys(keyInput)
             ApiKeyType.CLAUDE -> claudeService.testApiKey(keyInput, settings.claudeModel)
             ApiKeyType.ELEVENLABS -> voiceEngine.elevenLabs.testApiKey(keyInput)
             ApiKeyType.OPENAI -> voiceEngine.openAi.testApiKey(keyInput)
@@ -318,6 +518,7 @@ class ShailaRepository(
     suspend fun setVoiceProvider(provider: VoiceProviderType) = settingsStore.setVoiceProvider(provider)
     suspend fun setVoiceForProvider(provider: VoiceProviderType, voiceId: String) =
         settingsStore.setVoiceForProvider(provider, voiceId)
+    suspend fun setGeminiLiveVoice(voice: GeminiLiveVoice) = settingsStore.setGeminiLiveVoice(voice)
     suspend fun setVoiceSpeed(speed: Float) = settingsStore.setVoiceSpeed(speed)
     suspend fun setElevenLabsStability(value: Float) = settingsStore.setElevenLabsStability(value)
     suspend fun setElevenLabsStyle(value: Float) = settingsStore.setElevenLabsStyle(value)
@@ -327,6 +528,26 @@ class ShailaRepository(
     suspend fun setDarkTheme(dark: Boolean) = settingsStore.setDarkTheme(dark)
     suspend fun setAccentPreset(preset: AccentColorPreset) = settingsStore.setAccentPreset(preset)
     suspend fun setApkUpdateUrl(url: String) = settingsStore.setApkUpdateUrl(url)
+    suspend fun setAssistantName(name: String) = settingsStore.setAssistantName(name)
+    suspend fun setPersonalityPreset(preset: PersonalityPreset) = settingsStore.setPersonalityPreset(preset)
+    suspend fun setCustomPersonality(name: String, prompt: String) =
+        settingsStore.setCustomPersonality(name, prompt)
+    suspend fun setResponseStyle(style: ResponseStyle) = settingsStore.setResponseStyle(style)
+    suspend fun setHomeCharacterStyle(style: HomeCharacterStyle) = settingsStore.setHomeCharacterStyle(style)
+    suspend fun setCustomCharacterUri(uri: String) {
+        if (uri.isNotBlank()) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    Uri.parse(uri),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+        }
+        settingsStore.setCustomCharacterUri(uri)
+    }
+    suspend fun setShowHerEverywhere(enabled: Boolean) = settingsStore.setShowHerEverywhere(enabled)
+    suspend fun setReduceMotion(enabled: Boolean) = settingsStore.setReduceMotion(enabled)
+    suspend fun setListenOnAppOpen(enabled: Boolean) = settingsStore.setListenOnAppOpen(enabled)
     suspend fun saveImageRegion(
         key: com.example.data.model.ImageRegionKey,
         rect: com.example.data.model.ImageRegionRect

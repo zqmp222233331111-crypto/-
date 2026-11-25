@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,12 +26,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Download
@@ -49,6 +55,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -68,6 +75,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +89,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -93,18 +102,21 @@ import com.example.data.model.AccentColorPreset
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppSettings
 import com.example.data.model.DefaultImageRegions
+import com.example.data.model.GeminiLiveVoice
+import com.example.data.model.HomeCharacterStyle
 import com.example.data.model.ImageRegionsConfig
+import com.example.data.model.PersonalityPreset
+import com.example.data.model.ResponseStyle
 import com.example.data.model.ShailaCatalog
 import com.example.data.model.SpeechLanguage
 import com.example.data.model.VoiceProviderType
 import com.example.data.remote.AppUpdateManager
 import com.example.data.remote.DownloadProgressState
-import com.example.ui.components.CroppedImage
 import com.example.ui.components.GlassCard
+import com.example.ui.components.ShailaCharacterAvatar
 import com.example.ui.theme.AccentVioletBright
 import com.example.ui.theme.AccentVioletSecondary
 import com.example.ui.theme.LocalShailaColors
-import com.example.ui.theme.accentPair
 import com.example.ui.viewmodel.ApkUpdateUiState
 import com.example.ui.viewmodel.KeyTestStatus
 
@@ -141,17 +153,37 @@ fun SettingsScreen(
     onCheckLatestBuild: (String) -> Unit = {},
     onDownloadApk: (String) -> Unit = {},
     onCancelApkDownload: () -> Unit = {},
-    onOpenDownloads: () -> Unit = {}
+    onOpenDownloads: () -> Unit = {},
+    openApiKeysSignal: Int = 0,
+    isLoadingElevenVoices: Boolean = false,
+    onSelectGeminiVoice: (GeminiLiveVoice) -> Unit = {},
+    onLoadMyElevenLabsVoices: () -> Unit = {},
+    onAddCustomElevenLabsVoice: (String, String) -> Unit = { _, _ -> },
+    onSetAssistantName: (String) -> Unit = {},
+    onSelectPersonality: (PersonalityPreset) -> Unit = {},
+    onSaveCustomPersonality: (String, String) -> Unit = { _, _ -> },
+    onSelectResponseStyle: (ResponseStyle) -> Unit = {},
+    onToggleListenOnAppOpen: (Boolean) -> Unit = {},
+    onSelectHomeCharacterStyle: (HomeCharacterStyle) -> Unit = {},
+    onSelectCustomCharacterUri: (String) -> Unit = {},
+    onToggleShowHerEverywhere: (Boolean) -> Unit = {},
+    onToggleReduceMotion: (Boolean) -> Unit = {}
 ) {
     val isBn = settings.appLanguage == AppLanguage.BENGALI
     val ext = LocalShailaColors.current
 
-    var expandApiKeys by rememberSaveable { mutableStateOf(false) }
+    var expandApiKeys by rememberSaveable { mutableStateOf(openApiKeysSignal > 0) }
     var expandVoice by rememberSaveable { mutableStateOf(false) }
     var expandLanguage by rememberSaveable { mutableStateOf(false) }
     var expandAppearance by rememberSaveable { mutableStateOf(false) }
     var expandPrivacy by rememberSaveable { mutableStateOf(false) }
     var expandDownloadApk by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(openApiKeysSignal) {
+        if (openApiKeysSignal > 0) {
+            expandApiKeys = true
+        }
+    }
 
     var showClearChatConfirm by remember { mutableStateOf(false) }
     var showClearMemoriesConfirm by remember { mutableStateOf(false) }
@@ -201,28 +233,25 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    CroppedImage(
-                        region = imageRegions.avatarFace,
+                    ShailaCharacterAvatar(
+                        homeCharacterStyle = settings.homeCharacterStyle,
+                        customCharacterUri = settings.customCharacterUri,
+                        fallbackAvatarRegion = imageRegions.avatarFace,
                         contentDescription = "Shaila avatar",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(72.dp)
-                            .clip(CircleShape)
-                            .border(
-                                width = 2.dp,
-                                brush = Brush.linearGradient(listOf(AccentVioletSecondary, AccentVioletBright)),
-                                shape = CircleShape
-                            )
+                        modifier = Modifier.size(72.dp),
+                        borderColor = AccentVioletSecondary
                     )
                     Spacer(modifier = Modifier.width(16.dp))
                     Column {
+                        val isDefaultShaila = settings.assistantName.equals("Shaila", ignoreCase = true) ||
+                            settings.assistantName == "শাইলা"
                         Text(
-                            text = "Shaila (শাইলা)",
+                            text = if (isDefaultShaila) "Shaila (শাইলা)" else settings.assistantName,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "AI Voice Assistant",
+                            text = "${settings.effectivePersonalityLabel(isBn)} • ${settings.geminiLiveVoice.voiceName}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -243,65 +272,145 @@ fun SettingsScreen(
                 cornerRadius = 24.dp,
                 contentPadding = 14.dp
             ) {
-                // 1. API Keys
+                // 1. API Keys (Connections with direct links)
                 SettingsMenuRow(
                     icon = Icons.Filled.Key,
                     iconBg1 = Color(0xFF7C3AED),
                     iconBg2 = Color(0xFFA855F7),
-                    title = if (isBn) "API Keys" else "API Keys",
-                    subtitle = if (isBn) "Setup your API keys (Claude, ElevenLabs, OpenAI, xAI)" else "Setup your encrypted API keys",
+                    title = "API Keys",
+                    subtitle = if (isBn) {
+                        "Gemini, Groq, ElevenLabs, Claude ও সরাসরি লিংক"
+                    } else {
+                        "Gemini, Groq, ElevenLabs, Claude + direct key links"
+                    },
                     expanded = expandApiKeys,
                     onClick = { expandApiKeys = !expandApiKeys }
                 )
                 AnimatedVisibility(visible = expandApiKeys) {
-                    Column(modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)) {
+                    Column(
+                        modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                         Text(
                             text = if (isBn) {
-                                "সব কী শুধুমাত্র আপনার ফোনে অ্যান্ড্রয়েড কীস্টোর দিয়ে এনক্রিপ্টেড অবস্থায় সংরক্ষিত হয়।"
+                                "আলাদা করে ওয়েবসাইট খুঁজতে হবে না—প্রতিটি কার্ডের নিচের লিংকে ট্যাপ করলেই সরাসরি ফ্রি বা অফিশিয়াল API Key পেজ খুলে যাবে।"
                             } else {
-                                "All keys are encrypted locally via Android Keystore and never hardcoded."
+                                "No need to hunt for URLs—tap the link inside any card to open its official key page directly."
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        ApiKeyInputRow(
-                            label = "Anthropic Claude Key",
-                            placeholder = "sk-ant-...",
-                            initialValue = apiKeys.claudeKey,
-                            status = keyTestStatuses[ApiKeyType.CLAUDE],
-                            testTagPrefix = "claude",
+
+                        ConnectionApiKeyCard(
+                            title = "Voice - Gemini key",
+                            description = if (isBn) {
+                                "লাইভ ভয়েস কল এবং মানুষের মতো বাস্তব ফিমেল কণ্ঠের জন্য (Google AI Studio থেকে সম্পূর্ণ ফ্রি)।"
+                            } else {
+                                "Powers real-time Live Voice call & natural human female voices (free at Google AI Studio)."
+                            },
+                            placeholder = "AIza...",
+                            initialValue = apiKeys.geminiKey,
+                            readyLabel = if (apiKeys.geminiKey.isNotBlank()) "Ready" else null,
+                            linkLabel = if (isBn) "Google AI Studio থেকে ফ্রি কী নিন" else "Get a free key at Google AI Studio",
+                            linkUrl = "https://aistudio.google.com/apikey",
+                            status = keyTestStatuses[ApiKeyType.GEMINI],
+                            testTagPrefix = "gemini",
                             isBn = isBn,
-                            onSave = { onSaveApiKey(ApiKeyType.CLAUDE, it) },
-                            onTest = { onTestApiKey(ApiKeyType.CLAUDE, it) }
+                            onSave = { onSaveApiKey(ApiKeyType.GEMINI, it) },
+                            onTest = { onTestApiKey(ApiKeyType.GEMINI, it) }
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        ApiKeyInputRow(
-                            label = "ElevenLabs API Key",
-                            placeholder = "xi-...",
+
+                        val groqCount = apiKeys.groqKeysList().size
+                        ConnectionApiKeyCard(
+                            title = "Chat - Groq keys",
+                            description = if (isBn) {
+                                "দ্রুত ফ্রি চ্যাট ও উত্তর। কমা (,) দিয়ে একাধিক কী দিলে লিমিট শেষ হলে অটো বদলে নেবে।"
+                            } else {
+                                "Fast free typed/voice replies. Separate multiple keys with commas for auto rotation."
+                            },
+                            placeholder = "gsk_...",
+                            initialValue = apiKeys.groqKey,
+                            readyLabel = if (groqCount > 0) {
+                                if (groqCount == 1) "1 key ready" else "$groqCount keys ready"
+                            } else null,
+                            linkLabel = if (isBn) "Groq থেকে ফ্রি কী নিন" else "Get a free key at Groq",
+                            linkUrl = "https://console.groq.com/keys",
+                            status = keyTestStatuses[ApiKeyType.GROQ],
+                            testTagPrefix = "groq",
+                            isBn = isBn,
+                            onSave = { onSaveApiKey(ApiKeyType.GROQ, it) },
+                            onTest = { onTestApiKey(ApiKeyType.GROQ, it) }
+                        )
+
+                        ConnectionApiKeyCard(
+                            title = "Voice - ElevenLabs key (optional)",
+                            description = if (isBn) {
+                                "আপনার পছন্দের কাস্টম ফিমেল ভয়েস বা ElevenLabs-এর আসল কণ্ঠে শাইলাকে কথা বলাতে ব্যবহার করুন।"
+                            } else {
+                                "Use custom ElevenLabs female voices or your own cloned library voices."
+                            },
+                            placeholder = "xi-... / sk_...",
                             initialValue = apiKeys.elevenLabsKey,
+                            readyLabel = if (apiKeys.elevenLabsKey.isNotBlank()) "Ready" else null,
+                            linkLabel = if (isBn) "ElevenLabs থেকে কী নিন" else "Get a key at ElevenLabs",
+                            linkUrl = "https://elevenlabs.io/app/settings/api-keys",
                             status = keyTestStatuses[ApiKeyType.ELEVENLABS],
                             testTagPrefix = "elevenlabs",
                             isBn = isBn,
                             onSave = { onSaveApiKey(ApiKeyType.ELEVENLABS, it) },
                             onTest = { onTestApiKey(ApiKeyType.ELEVENLABS, it) }
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        ApiKeyInputRow(
-                            label = "OpenAI API Key",
+
+                        ConnectionApiKeyCard(
+                            title = "Anthropic Claude Key (optional)",
+                            description = if (isBn) {
+                                "উচ্চমানের বাংলা লেখা, ভিডিও বিশ্লেষণ ও গভীর চ্যাটের জন্য ঐচ্ছিক ক্লড কী।"
+                            } else {
+                                "Optional Claude key for advanced Bengali writing and video/photo analysis."
+                            },
+                            placeholder = "sk-ant-...",
+                            initialValue = apiKeys.claudeKey,
+                            readyLabel = if (apiKeys.claudeKey.isNotBlank()) "Ready" else null,
+                            linkLabel = if (isBn) "Anthropic Console থেকে কী নিন" else "Get a key at Anthropic Console",
+                            linkUrl = "https://console.anthropic.com/settings/keys",
+                            status = keyTestStatuses[ApiKeyType.CLAUDE],
+                            testTagPrefix = "claude",
+                            isBn = isBn,
+                            onSave = { onSaveApiKey(ApiKeyType.CLAUDE, it) },
+                            onTest = { onTestApiKey(ApiKeyType.CLAUDE, it) }
+                        )
+
+                        ConnectionApiKeyCard(
+                            title = "OpenAI API Key (optional)",
+                            description = if (isBn) {
+                                "OpenAI Coral / Nova ফিমেল ভয়েসের জন্য ঐচ্ছিক কী।"
+                            } else {
+                                "Optional key for OpenAI Coral / Nova female TTS voices."
+                            },
                             placeholder = "sk-...",
                             initialValue = apiKeys.openAiKey,
+                            readyLabel = if (apiKeys.openAiKey.isNotBlank()) "Ready" else null,
+                            linkLabel = if (isBn) "OpenAI Platform থেকে কী নিন" else "Get a key at OpenAI",
+                            linkUrl = "https://platform.openai.com/api-keys",
                             status = keyTestStatuses[ApiKeyType.OPENAI],
                             testTagPrefix = "openai",
                             isBn = isBn,
                             onSave = { onSaveApiKey(ApiKeyType.OPENAI, it) },
                             onTest = { onTestApiKey(ApiKeyType.OPENAI, it) }
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        ApiKeyInputRow(
-                            label = "xAI / Grok API Key",
+
+                        ConnectionApiKeyCard(
+                            title = "xAI / Grok API Key (optional)",
+                            description = if (isBn) {
+                                "Grok / xAI Ara ফিমেল ভয়েসের জন্য ঐচ্ছিক কী।"
+                            } else {
+                                "Optional key for Grok / xAI Ara conversational voice."
+                            },
                             placeholder = "xai-...",
                             initialValue = apiKeys.xaiKey,
+                            readyLabel = if (apiKeys.xaiKey.isNotBlank()) "Ready" else null,
+                            linkLabel = if (isBn) "xAI Console থেকে কী নিন" else "Get a key at xAI Console",
+                            linkUrl = "https://console.xai.com/",
                             status = keyTestStatuses[ApiKeyType.XAI],
                             testTagPrefix = "xai",
                             isBn = isBn,
@@ -313,130 +422,37 @@ fun SettingsScreen(
 
                 HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 6.dp))
 
-                // 2. Voice Provider
+                // 2. Voice & Personality
                 SettingsMenuRow(
                     icon = Icons.Filled.RecordVoiceOver,
                     iconBg1 = Color(0xFF6366F1),
                     iconBg2 = Color(0xFF8B5CF6),
-                    title = if (isBn) "Voice Provider" else "Voice Provider",
-                    subtitle = "ElevenLabs / OpenAI / Grok (${settings.voiceProvider.titleEn})",
+                    title = if (isBn) "ভয়েস ও ব্যক্তিত্ব (Voice & Personality)" else "Voice & Personality",
+                    subtitle = "${settings.assistantName} • ${settings.effectivePersonalityLabel(isBn)} • ${settings.geminiLiveVoice.voiceName}",
                     expanded = expandVoice,
                     onClick = { expandVoice = !expandVoice }
                 )
                 AnimatedVisibility(visible = expandVoice) {
-                    Column(modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)) {
-                        VoiceProviderType.entries.forEach { provider ->
-                            val selected = settings.voiceProvider == provider
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(MaterialTheme.shapes.medium)
-                                    .clickable { onSelectVoiceProvider(provider) }
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = selected,
-                                    onClick = { onSelectVoiceProvider(provider) }
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = if (isBn) provider.titleBn else provider.titleEn,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = provider.subtitleBn,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = if (isBn) "উপলব্ধ ভয়েসসমূহ (${settings.voiceProvider.titleEn})" else "Available Voices (${settings.voiceProvider.titleEn})",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                        if (voicePreviewStatus != null) {
-                            Text(
-                                text = voicePreviewStatus,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        val voices = ShailaCatalog.voicesFor(settings.voiceProvider)
-                        val selectedVoiceId = settings.currentVoiceId()
-                        voices.forEach { voice ->
-                            val isSelected = voice.voiceId == selectedVoiceId
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(MaterialTheme.shapes.small)
-                                    .clickable { onSelectVoice(settings.voiceProvider, voice.voiceId) }
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = isSelected,
-                                    onClick = { onSelectVoice(settings.voiceProvider, voice.voiceId) }
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(voice.name, style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        text = if (isBn) voice.descriptionBn else voice.descriptionEn,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                FilledTonalButton(
-                                    onClick = { onPreviewVoice(settings.voiceProvider, voice.voiceId) },
-                                    modifier = Modifier.testTag("preview_voice_${voice.voiceId}")
-                                ) {
-                                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(if (isBn) "শুনে দেখো" else "Preview")
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = if (isBn) "কথা বলার গতি (Speed): ${"%.2fx".format(settings.voiceSpeed)}"
-                            else "Speech Speed: ${"%.2fx".format(settings.voiceSpeed)}",
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                        Slider(
-                            value = settings.voiceSpeed,
-                            onValueChange = onChangeVoiceSpeed,
-                            valueRange = 0.7f..1.5f
-                        )
-
-                        if (settings.voiceProvider == VoiceProviderType.ELEVENLABS) {
-                            Text(
-                                text = "Stability: ${"%.2f".format(settings.elevenLabsStability)}",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                            Slider(
-                                value = settings.elevenLabsStability,
-                                onValueChange = onChangeStability,
-                                valueRange = 0f..1f
-                            )
-                            Text(
-                                text = "Style: ${"%.2f".format(settings.elevenLabsStyle)}",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                            Slider(
-                                value = settings.elevenLabsStyle,
-                                onValueChange = onChangeStyle,
-                                valueRange = 0f..1f
-                            )
-                        }
-                    }
+                    VoiceAndPersonalitySection(
+                        settings = settings,
+                        isBn = isBn,
+                        voicePreviewStatus = voicePreviewStatus,
+                        isLoadingElevenVoices = isLoadingElevenVoices,
+                        onSetAssistantName = onSetAssistantName,
+                        onSelectPersonality = onSelectPersonality,
+                        onSaveCustomPersonality = onSaveCustomPersonality,
+                        onSelectResponseStyle = onSelectResponseStyle,
+                        onToggleListenOnAppOpen = onToggleListenOnAppOpen,
+                        onSelectGeminiVoice = onSelectGeminiVoice,
+                        onSelectVoiceProvider = onSelectVoiceProvider,
+                        onSelectVoice = onSelectVoice,
+                        onPreviewVoice = onPreviewVoice,
+                        onLoadMyElevenLabsVoices = onLoadMyElevenLabsVoices,
+                        onAddCustomElevenLabsVoice = onAddCustomElevenLabsVoice,
+                        onChangeVoiceSpeed = onChangeVoiceSpeed,
+                        onChangeStability = onChangeStability,
+                        onChangeStyle = onChangeStyle
+                    )
                 }
 
                 HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 6.dp))
@@ -514,58 +530,28 @@ fun SettingsScreen(
 
                 HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 6.dp))
 
-                // 4. Appearance
+                // 4. Look & Feel (Home Character, Show Everywhere, Reduce Motion, Theme & Accent)
                 SettingsMenuRow(
                     icon = Icons.Filled.DarkMode,
                     iconBg1 = Color(0xFF3B82F6),
                     iconBg2 = Color(0xFF6366F1),
-                    title = if (isBn) "Appearance" else "Appearance",
-                    subtitle = if (settings.darkTheme) "Dark Theme" else "Light Theme",
+                    title = if (isBn) "লুক অ্যান্ড ফিল (Look & Feel)" else "Look & Feel",
+                    subtitle = "${if (isBn) settings.homeCharacterStyle.titleBn else settings.homeCharacterStyle.titleEn} • ${if (settings.darkTheme) "Dark" else "Light"}",
                     expanded = expandAppearance,
                     onClick = { expandAppearance = !expandAppearance }
                 )
                 AnimatedVisibility(visible = expandAppearance) {
-                    Column(modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)) {
-                        ToggleRow(
-                            title = if (isBn) "ডার্ক মোড (Dark Theme)" else "Dark Theme",
-                            subtitle = if (isBn) "ডিপ নেভি-টু-ভায়োলেট গ্রেডিয়েন্ট" else "Deep navy-to-violet gradient",
-                            checked = settings.darkTheme,
-                            onCheckedChange = onToggleDarkTheme
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = if (isBn) "অ্যাকসেন্ট রঙ (Accent Color)" else "Accent Color",
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            AccentColorPreset.entries.forEach { preset ->
-                                val (c1, c2) = accentPair(preset)
-                                val isSelected = settings.accentPreset == preset
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(Brush.linearGradient(listOf(c1, c2)))
-                                        .then(
-                                            if (isSelected) Modifier.border(3.dp, Color.White, CircleShape)
-                                            else Modifier
-                                        )
-                                        .clickable { onSelectAccent(preset) },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (isSelected) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Check,
-                                            contentDescription = preset.labelEn,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    LookAndFeelSection(
+                        settings = settings,
+                        imageRegions = imageRegions,
+                        isBn = isBn,
+                        onToggleDarkTheme = onToggleDarkTheme,
+                        onSelectAccent = onSelectAccent,
+                        onSelectHomeCharacterStyle = onSelectHomeCharacterStyle,
+                        onSelectCustomCharacterUri = onSelectCustomCharacterUri,
+                        onToggleShowHerEverywhere = onToggleShowHerEverywhere,
+                        onToggleReduceMotion = onToggleReduceMotion
+                    )
                 }
 
                 HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 6.dp))
@@ -942,72 +928,156 @@ private fun ToggleRow(
 }
 
 @Composable
-private fun ApiKeyInputRow(
-    label: String,
+private fun ConnectionApiKeyCard(
+    title: String,
+    description: String,
     placeholder: String,
     initialValue: String,
+    readyLabel: String?,
+    linkLabel: String,
+    linkUrl: String,
     status: KeyTestStatus?,
     testTagPrefix: String,
     isBn: Boolean,
     onSave: (String) -> Unit,
     onTest: (String) -> Unit
 ) {
-    var value by rememberSaveable(label, initialValue) { mutableStateOf(initialValue) }
+    var value by rememberSaveable(title, initialValue) { mutableStateOf(initialValue) }
     var visible by remember { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
+    val ext = LocalShailaColors.current
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = {
-                value = it
-                onSave(it)
-            },
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = ext.glassFill,
+        border = BorderStroke(1.dp, ext.glassBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .testTag("key_input_$testTagPrefix"),
-            label = { Text(label) },
-            placeholder = { Text(placeholder) },
-            singleLine = true,
-            visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                IconButton(onClick = { visible = !visible }) {
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                val isReady = readyLabel != null
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                        contentDescription = if (visible) "Hide key" else "Show key"
+                        imageVector = if (isReady) Icons.Filled.CheckCircle else Icons.Filled.Warning,
+                        contentDescription = null,
+                        tint = if (isReady) ext.success else Color(0xFFF59E0B),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = readyLabel ?: (if (isBn) "কী যোগ করুন" else "Add a key"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isReady) ext.success else Color(0xFFF59E0B),
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedTextField(
+                value = value,
+                onValueChange = {
+                    value = it
+                    onSave(it)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("key_input_$testTagPrefix"),
+                placeholder = { Text(placeholder) },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { visible = !visible }) {
+                        Icon(
+                            imageVector = if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            contentDescription = if (visible) "Hide key" else "Show key"
+                        )
+                    }
+                }
+            )
+
+            Button(
+                onClick = {
+                    onSave(value)
+                    if (value.isNotBlank()) onTest(value)
+                },
+                enabled = status?.testing != true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("test_key_$testTagPrefix")
+            ) {
+                if (status?.testing == true) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text(
+                    if (isBn) "সেভ ও যাচাই করুন (Save & Test)" else "Save & Test Key",
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
             if (status != null && status.message.isNotBlank()) {
                 Text(
                     text = status.message,
                     style = MaterialTheme.typography.labelSmall,
                     color = when (status.success) {
-                        true -> LocalShailaColors.current.success
+                        true -> ext.success
                         false -> MaterialTheme.colorScheme.error
                         null -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.weight(1f)
+                    }
                 )
-            } else {
-                Spacer(modifier = Modifier.weight(1f))
             }
-            FilledTonalButton(
-                onClick = { onTest(value) },
-                enabled = value.isNotBlank() && status?.testing != true,
-                modifier = Modifier.testTag("test_key_$testTagPrefix")
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable {
+                        runCatching { uriHandler.openUri(linkUrl) }
+                    }
+                    .padding(vertical = 4.dp, horizontal = 2.dp)
+                    .testTag("key_link_$testTagPrefix"),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (status?.testing == true) {
-                    CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.width(6.dp))
-                }
-                Text(if (isBn) "Test Key" else "Test Key")
+                Text(
+                    text = linkLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AccentVioletBright,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                    contentDescription = linkLabel,
+                    tint = AccentVioletBright,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }

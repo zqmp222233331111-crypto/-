@@ -5,6 +5,18 @@ import com.example.data.local.SecureStorageManager
 import com.example.data.model.AppSettings
 import com.example.data.model.ShailaCatalog
 import com.example.data.model.VoiceProviderType
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.sin
 
 data class SpeakOutcome(
     val usedProviderLabel: String,
@@ -21,10 +33,42 @@ class VoiceEngine(
     val xai = XaiTtsProvider(secureStorage, streamPlayer)
     private val deviceTts = AndroidBuiltInTtsProvider(context.applicationContext)
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var deviceRhythmJob: Job? = null
+
+    private val _ttsSpeechLevel = MutableStateFlow(0f)
+    val ttsSpeechLevel: StateFlow<Float> = _ttsSpeechLevel.asStateFlow()
+
+    init {
+        scope.launch {
+            streamPlayer.playbackEnergy.collect { energy ->
+                _ttsSpeechLevel.value = energy
+            }
+        }
+    }
+
     private fun providerFor(type: VoiceProviderType): TtsProvider = when (type) {
         VoiceProviderType.ELEVENLABS -> elevenLabs
         VoiceProviderType.OPENAI -> openAi
         VoiceProviderType.XAI -> xai
+    }
+
+    private fun startDeviceRhythm() {
+        deviceRhythmJob?.cancel()
+        deviceRhythmJob = scope.launch {
+            var phase = 0f
+            while (isActive) {
+                phase += 0.38f
+                _ttsSpeechLevel.value = (0.3f + 0.55f * abs(sin(phase))).coerceIn(0.15f, 0.95f)
+                delay(55)
+            }
+        }
+    }
+
+    private fun stopDeviceRhythm() {
+        deviceRhythmJob?.cancel()
+        deviceRhythmJob = null
+        _ttsSpeechLevel.value = 0f
     }
 
     /**
@@ -79,12 +123,17 @@ class VoiceEngine(
         }
 
         // Final fallback: phone's built-in Android TTS
-        val fallbackResult = deviceTts.speak(
-            text = cleanText,
-            voiceId = "",
-            options = options,
-            onPlaybackStarted = onPlaybackStarted
-        )
+        startDeviceRhythm()
+        val fallbackResult = try {
+            deviceTts.speak(
+                text = cleanText,
+                voiceId = "",
+                options = options,
+                onPlaybackStarted = onPlaybackStarted
+            )
+        } finally {
+            stopDeviceRhythm()
+        }
         return SpeakOutcome(deviceTts.displayLabel, fallbackResult.isSuccess)
     }
 
@@ -111,7 +160,12 @@ class VoiceEngine(
             Result.success(provider.displayLabel)
         } else {
             // Try device TTS preview if API key isn't configured yet, while reporting cause
-            val fallback = deviceTts.speak(sampleText, "", options, onPlaybackStarted)
+            startDeviceRhythm()
+            val fallback = try {
+                deviceTts.speak(sampleText, "", options, onPlaybackStarted)
+            } finally {
+                stopDeviceRhythm()
+            }
             if (fallback.isSuccess) {
                 Result.failure(
                     IllegalStateException(
@@ -125,6 +179,7 @@ class VoiceEngine(
     }
 
     fun stop() {
+        stopDeviceRhythm()
         streamPlayer.stop()
         deviceTts.stop()
     }

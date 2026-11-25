@@ -126,4 +126,69 @@ class ExampleUnitTest {
             com.example.data.remote.AppUpdateManager.normalizeReleaseSourceUrl(directApk)
         )
     }
+
+    @Test
+    fun `api keys snapshot parses comma separated groq keys and checks brain availability`() {
+        val snapshot = com.example.data.local.ApiKeysSnapshot(
+            groqKey = "gsk_first, gsk_second;\ngsk_third"
+        )
+        assertEquals(listOf("gsk_first", "gsk_second", "gsk_third"), snapshot.groqKeysList())
+        assertTrue(snapshot.hasAnyChatBrainKey())
+
+        val empty = com.example.data.local.ApiKeysSnapshot()
+        assertEquals(false, empty.hasAnyChatBrainKey())
+    }
+
+    @Test
+    fun `gemini live voices and custom elevenlabs voices merge properly`() {
+        val defaults = AppSettings()
+        assertEquals(com.example.data.model.GeminiLiveVoice.AOEDE, defaults.geminiLiveVoice)
+
+        val custom = com.example.data.model.VoiceOption(
+            voiceId = "custom_123",
+            name = "My Female Voice",
+            descriptionBn = "Custom",
+            descriptionEn = "Custom",
+            provider = VoiceProviderType.ELEVENLABS,
+            isCustom = true
+        )
+        val merged = defaults.copy(customElevenLabsVoices = listOf(custom)).allElevenLabsVoices()
+        assertEquals("custom_123", merged.first().voiceId)
+        assertTrue(merged.size > ShailaCatalog.elevenLabsVoices.size)
+    }
+
+    @Test
+    fun `character and personality defaults plus custom prompt work cleanly`() {
+        val defaults = AppSettings()
+        assertEquals("Shaila", defaults.assistantName)
+        assertEquals(com.example.data.model.HomeCharacterStyle.HALF_BODY_SHAILA, defaults.homeCharacterStyle)
+        assertEquals(com.example.data.model.PersonalityPreset.FRIENDLY, defaults.personalityPreset)
+        assertEquals(com.example.data.model.ResponseStyle.BALANCED, defaults.responseStyle)
+        assertEquals(false, defaults.showHerEverywhere)
+        assertEquals(false, defaults.reduceMotion)
+        assertEquals(false, defaults.listenOnAppOpen)
+
+        val customized = defaults.copy(
+            assistantName = "Nadia",
+            personalityPreset = com.example.data.model.PersonalityPreset.CUSTOM,
+            customPersonalityName = "Sweet Companion",
+            customPersonalityPrompt = "Speak gently with poetic Bengali warmth.",
+            responseStyle = com.example.data.model.ResponseStyle.CONCISE
+        )
+        assertEquals("Sweet Companion", customized.effectivePersonalityLabel(true))
+
+        val prompt = ClaudeApiService().buildAssistantSystemPrompt(
+            memories = emptyList(),
+            preferredLanguage = AppLanguage.BENGALI,
+            spokenStyle = true,
+            assistantName = customized.assistantName,
+            personalityPreset = customized.personalityPreset,
+            customPersonalityPrompt = customized.customPersonalityPrompt,
+            responseStyle = customized.responseStyle
+        )
+        assertTrue(prompt.contains("Nadia"))
+        assertTrue(prompt.contains("Speak gently with poetic Bengali warmth."))
+        assertTrue(prompt.contains("1-2 natural sentences"))
+        assertTrue(prompt.contains("Amir"))
+    }
 }

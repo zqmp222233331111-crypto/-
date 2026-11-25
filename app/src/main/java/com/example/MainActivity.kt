@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -16,6 +17,7 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -30,13 +32,16 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.data.model.AppLanguage
 import com.example.data.remote.DownloadProgressState
+import com.example.data.remote.LiveCallStatus
 import com.example.ui.components.ShailaBottomBar
 import com.example.ui.components.ShailaCosmicBackdrop
 import com.example.ui.components.ShailaRoutes
 import com.example.ui.screens.GalleryScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ImageRegionDebugScreen
+import com.example.ui.screens.LiveVoiceScreen
 import com.example.ui.screens.MemoryScreen
+import com.example.ui.screens.MinimizedLiveCallPill
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.ToolsScreen
@@ -64,6 +69,9 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
     val apiKeys by viewModel.apiKeys.collectAsStateWithLifecycle()
     val orbState by viewModel.orbState.collectAsStateWithLifecycle()
     val rmsLevel by viewModel.rmsLevel.collectAsStateWithLifecycle()
+    val speakingLevel by viewModel.speakingLevel.collectAsStateWithLifecycle()
+    val liveMicLevel by viewModel.liveMicLevel.collectAsStateWithLifecycle()
+    val liveCallState by viewModel.liveCallState.collectAsStateWithLifecycle()
     val partialTranscript by viewModel.partialTranscript.collectAsStateWithLifecycle()
     val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
     val activeVoiceSource by viewModel.activeVoiceSource.collectAsStateWithLifecycle()
@@ -73,11 +81,13 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
     val toolState by viewModel.toolState.collectAsStateWithLifecycle()
     val keyTestStatuses by viewModel.keyTestStatuses.collectAsStateWithLifecycle()
     val voicePreviewStatus by viewModel.voicePreviewStatus.collectAsStateWithLifecycle()
+    val isLoadingElevenVoices by viewModel.isLoadingElevenVoices.collectAsStateWithLifecycle()
     val apkUpdateState by viewModel.apkUpdateState.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val isBn = settings.appLanguage == AppLanguage.BENGALI
+    var openApiKeysSignal by remember { mutableIntStateOf(0) }
 
     ShailaTheme(
         darkTheme = settings.darkTheme,
@@ -142,81 +152,97 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
                 }
             }
 
-            ShailaCosmicBackdrop {
-                Scaffold(
-                    containerColor = Color.Transparent,
-                    contentWindowInsets = WindowInsets.safeDrawing,
-                    snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-                    bottomBar = {
-                        if (showBottomBar) {
-                            ShailaBottomBar(
-                                currentRoute = currentRoute,
-                                appLanguage = settings.appLanguage,
-                                onNavigate = { target ->
-                                    if (target != currentRoute) {
-                                        navController.navigate(target) {
-                                            popUpTo(ShailaRoutes.HOME) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    }
+            Box(modifier = Modifier.fillMaxSize()) {
+                ShailaCosmicBackdrop {
+                    Scaffold(
+                        containerColor = Color.Transparent,
+                        contentWindowInsets = WindowInsets.safeDrawing,
+                        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+                        bottomBar = {
+                            Column {
+                                if (liveCallState.isActive && liveCallState.isMinimized) {
+                                    MinimizedLiveCallPill(
+                                        liveState = liveCallState,
+                                        settings = settings,
+                                        avatarRegion = imageRegions.avatarFace,
+                                        onExpand = { viewModel.setLiveMinimized(false) },
+                                        onToggleMute = viewModel::toggleLiveMute,
+                                        onEndCall = viewModel::endLiveCall
+                                    )
                                 }
-                            )
-                        }
-                    }
-                ) { innerPadding ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                    ) {
-                        NavHost(
-                            navController = navController,
-                            startDestination = ShailaRoutes.HOME
-                        ) {
-                            composable(ShailaRoutes.HOME) {
-                                HomeScreen(
-                                    settings = settings,
-                                    imageRegions = imageRegions,
-                                    messages = messages,
-                                    memoryCount = memories.size,
-                                    orbState = orbState,
-                                    rmsLevel = rmsLevel,
-                                    partialTranscript = partialTranscript,
-                                    statusMessage = statusMessage,
-                                    activeVoiceSource = activeVoiceSource,
-                                    needsApiKeyBanner = needsApiKeyBanner,
-                                    pendingSafetyPrompt = pendingSafetyPrompt,
-                                    greetingText = viewModel.getCurrentGreeting(),
-                                    onUpdateMicPermission = viewModel::updateMicPermission,
-                                    onStartListening = { viewModel.startVoiceListening(null) },
-                                    onStopListening = viewModel::stopVoiceListening,
-                                    onStopSpeaking = viewModel::stopSpeaking,
-                                    onSendMessage = { text -> viewModel.submitUserMessage(text) },
-                                    onSpeakMessage = { text -> viewModel.speakOut(text) },
-                                    onSaveToMemory = { text ->
-                                        viewModel.addMemory(text, if (isBn) "চ্যাট থেকে" else "From Chat")
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar(
-                                                if (isBn) "স্মৃতিতে সংরক্ষিত হয়েছে" else "Saved to Memory"
-                                            )
+                                if (showBottomBar) {
+                                    ShailaBottomBar(
+                                        currentRoute = currentRoute,
+                                        appLanguage = settings.appLanguage,
+                                        onNavigate = { target ->
+                                            if (target != currentRoute) {
+                                                navController.navigate(target) {
+                                                    popUpTo(ShailaRoutes.HOME) { saveState = true }
+                                                    launchSingleTop = true
+                                                    restoreState = true
+                                                }
+                                            }
                                         }
-                                    },
-                                    onToggleHoldToTalk = viewModel::setHoldToTalkMode,
-                                    onToggleLanguage = viewModel::setAppLanguage,
-                                    onConfirmSafety = viewModel::confirmSafetyPrompt,
-                                    onDismissSafety = viewModel::dismissSafetyPrompt,
-                                    onOpenMemory = { navController.navigate(ShailaRoutes.MEMORY) },
-                                    onOpenSettings = {
-                                        navController.navigate(ShailaRoutes.SETTINGS) {
-                                            popUpTo(ShailaRoutes.HOME) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    },
-                                    onDismissStatus = viewModel::clearStatusMessage
-                                )
+                                    )
+                                }
                             }
+                        }
+                    ) { innerPadding ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding)
+                        ) {
+                            NavHost(
+                                navController = navController,
+                                startDestination = ShailaRoutes.HOME
+                            ) {
+                                composable(ShailaRoutes.HOME) {
+                                    HomeScreen(
+                                        settings = settings,
+                                        imageRegions = imageRegions,
+                                        messages = messages,
+                                        memoryCount = memories.size,
+                                        orbState = orbState,
+                                        rmsLevel = rmsLevel,
+                                        speakingLevel = speakingLevel,
+                                        partialTranscript = partialTranscript,
+                                        statusMessage = statusMessage,
+                                        activeVoiceSource = activeVoiceSource,
+                                        needsApiKeyBanner = needsApiKeyBanner,
+                                        pendingSafetyPrompt = pendingSafetyPrompt,
+                                        greetingText = viewModel.getCurrentGreeting(),
+                                        onUpdateMicPermission = viewModel::updateMicPermission,
+                                        onStartListening = { viewModel.startVoiceListening(null) },
+                                        onStopListening = viewModel::stopVoiceListening,
+                                        onStopSpeaking = viewModel::stopSpeaking,
+                                        onStartLiveCall = viewModel::startLiveCall,
+                                        onSendMessage = { text -> viewModel.submitUserMessage(text) },
+                                        onSpeakMessage = { text -> viewModel.speakOut(text) },
+                                        onSaveToMemory = { text ->
+                                            viewModel.addMemory(text, if (isBn) "চ্যাট থেকে" else "From Chat")
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar(
+                                                    if (isBn) "স্মৃতিতে সংরক্ষিত হয়েছে" else "Saved to Memory"
+                                                )
+                                            }
+                                        },
+                                        onToggleHoldToTalk = viewModel::setHoldToTalkMode,
+                                        onToggleLanguage = viewModel::setAppLanguage,
+                                        onConfirmSafety = viewModel::confirmSafetyPrompt,
+                                        onDismissSafety = viewModel::dismissSafetyPrompt,
+                                        onOpenMemory = { navController.navigate(ShailaRoutes.MEMORY) },
+                                        onOpenSettings = {
+                                            openApiKeysSignal++
+                                            navController.navigate(ShailaRoutes.SETTINGS) {
+                                                popUpTo(ShailaRoutes.HOME) { saveState = true }
+                                                launchSingleTop = true
+                                                restoreState = true
+                                            }
+                                        },
+                                        onDismissStatus = viewModel::clearStatusMessage
+                                    )
+                                }
 
                             composable(ShailaRoutes.GALLERY) {
                                 GalleryScreen(
@@ -307,7 +333,21 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
                                     onCheckLatestBuild = viewModel::checkLatestBuild,
                                     onDownloadApk = viewModel::startApkDownload,
                                     onCancelApkDownload = viewModel::cancelApkDownload,
-                                    onOpenDownloads = viewModel::openSystemDownloads
+                                    onOpenDownloads = viewModel::openSystemDownloads,
+                                    openApiKeysSignal = openApiKeysSignal,
+                                    isLoadingElevenVoices = isLoadingElevenVoices,
+                                    onSelectGeminiVoice = viewModel::setGeminiLiveVoice,
+                                    onLoadMyElevenLabsVoices = viewModel::loadMyElevenLabsVoices,
+                                    onAddCustomElevenLabsVoice = viewModel::addCustomElevenLabsVoice,
+                                    onSetAssistantName = viewModel::setAssistantName,
+                                    onSelectPersonality = viewModel::setPersonalityPreset,
+                                    onSaveCustomPersonality = viewModel::setCustomPersonality,
+                                    onSelectResponseStyle = viewModel::setResponseStyle,
+                                    onToggleListenOnAppOpen = viewModel::setListenOnAppOpen,
+                                    onSelectHomeCharacterStyle = viewModel::setHomeCharacterStyle,
+                                    onSelectCustomCharacterUri = viewModel::setCustomCharacterUri,
+                                    onToggleShowHerEverywhere = viewModel::setShowHerEverywhere,
+                                    onToggleReduceMotion = viewModel::setReduceMotion
                                 )
                             }
 
@@ -332,6 +372,31 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
                             }
                         }
                     }
+                }
+                }
+
+                // Full-screen Real-Time Live Voice Call overlay (when active & not minimized)
+                if ((liveCallState.isActive || liveCallState.status == LiveCallStatus.ERROR) && !liveCallState.isMinimized) {
+                    LiveVoiceScreen(
+                        liveState = liveCallState,
+                        settings = settings,
+                        avatarRegion = imageRegions.avatarFace,
+                        speakingLevel = speakingLevel,
+                        micLevel = liveMicLevel,
+                        onToggleMute = viewModel::toggleLiveMute,
+                        onMinimize = { viewModel.setLiveMinimized(true) },
+                        onEndCall = viewModel::endLiveCall,
+                        onRetry = viewModel::startLiveCall,
+                        onOpenApiKeys = {
+                            viewModel.endLiveCall()
+                            openApiKeysSignal++
+                            navController.navigate(ShailaRoutes.SETTINGS) {
+                                popUpTo(ShailaRoutes.HOME) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                    )
                 }
             }
         }

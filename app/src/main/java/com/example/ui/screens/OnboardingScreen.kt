@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Mic
@@ -64,6 +66,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -606,10 +609,15 @@ private fun ApiSetupSlide(
     onSaveApiKey: (ApiKeyType, String) -> Unit,
     onSkip: () -> Unit
 ) {
+    var geminiInput by rememberSaveable { mutableStateOf(apiKeys.geminiKey) }
+    var groqInput by rememberSaveable { mutableStateOf(apiKeys.groqKey) }
     var claudeInput by rememberSaveable { mutableStateOf(apiKeys.claudeKey) }
     var elevenInput by rememberSaveable { mutableStateOf(apiKeys.elevenLabsKey) }
+    var showGemini by remember { mutableStateOf(false) }
+    var showGroq by remember { mutableStateOf(false) }
     var showClaude by remember { mutableStateOf(false) }
     var showEleven by remember { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
 
     Column(
         modifier = Modifier
@@ -625,46 +633,79 @@ private fun ApiSetupSlide(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isBn) "API Key সেটআপ (ঐচ্ছিক)" else "API Key Setup (Optional)",
+                text = if (isBn) "API Key সেটআপ (ফ্রি লিংকসহ)" else "API Key Setup (With Direct Links)",
                 style = MaterialTheme.typography.headlineSmall
             )
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = if (isBn) {
-                "ক্লড (Claude) এবং ভয়েস প্রোভাইডার কী শুধু আপনার ফোনে এনক্রিপ্টেড অবস্থায় জমা থাকবে। চাইলে এখনই দিন অথবা পরে সেটিংসে যোগ করুন।"
+                "লাইভ ভয়েস ও আসল নারী কণ্ঠের জন্য নিচের লিংক থেকে একটি ফ্রি Gemini Key নিতে পারেন। সব কী আপনার ফোনে সুরক্ষিত থাকে।"
             } else {
-                "Your keys are encrypted on-device only. You can add them now or skip and set them later in Settings."
+                "Tap any direct link below to get a free Gemini or Groq key. All keys stay encrypted on-device."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         OutlinedTextField(
-            value = claudeInput,
+            value = geminiInput,
             onValueChange = {
-                claudeInput = it
-                onSaveApiKey(ApiKeyType.CLAUDE, it)
+                geminiInput = it
+                onSaveApiKey(ApiKeyType.GEMINI, it)
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .testTag("onboarding_claude_key"),
-            label = { Text("Anthropic Claude API Key") },
-            placeholder = { Text("sk-ant-...") },
+                .testTag("onboarding_gemini_key"),
+            label = { Text(if (isBn) "Voice - Gemini Key (ফ্রি ও প্রস্তাবিত)" else "Voice - Gemini Key (Free & Recommended)") },
+            placeholder = { Text("AIza...") },
             singleLine = true,
-            visualTransformation = if (showClaude) VisualTransformation.None else PasswordVisualTransformation(),
+            visualTransformation = if (showGemini) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {
-                IconButton(onClick = { showClaude = !showClaude }) {
+                IconButton(onClick = { showGemini = !showGemini }) {
                     Icon(
-                        imageVector = if (showClaude) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        imageVector = if (showGemini) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
                         contentDescription = "Toggle key visibility"
                     )
                 }
             }
         )
+        OnboardingDirectKeyLink(
+            label = if (isBn) "Google AI Studio থেকে ফ্রি কী নিন" else "Get a free key at Google AI Studio",
+            onClick = { runCatching { uriHandler.openUri("https://aistudio.google.com/apikey") } }
+        )
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        OutlinedTextField(
+            value = groqInput,
+            onValueChange = {
+                groqInput = it
+                onSaveApiKey(ApiKeyType.GROQ, it)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("onboarding_groq_key"),
+            label = { Text(if (isBn) "Chat - Groq Key (দ্রুত ফ্রি চ্যাট)" else "Chat - Groq Key (Fast Free Chat)") },
+            placeholder = { Text("gsk_...") },
+            singleLine = true,
+            visualTransformation = if (showGroq) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { showGroq = !showGroq }) {
+                    Icon(
+                        imageVector = if (showGroq) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = "Toggle key visibility"
+                    )
+                }
+            }
+        )
+        OnboardingDirectKeyLink(
+            label = if (isBn) "Groq থেকে ফ্রি কী নিন" else "Get a free key at Groq",
+            onClick = { runCatching { uriHandler.openUri("https://console.groq.com/keys") } }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         OutlinedTextField(
             value = elevenInput,
@@ -688,8 +729,41 @@ private fun ApiSetupSlide(
                 }
             }
         )
+        OnboardingDirectKeyLink(
+            label = if (isBn) "ElevenLabs থেকে কী নিন" else "Get a key at ElevenLabs",
+            onClick = { runCatching { uriHandler.openUri("https://elevenlabs.io/app/settings/api-keys") } }
+        )
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        OutlinedTextField(
+            value = claudeInput,
+            onValueChange = {
+                claudeInput = it
+                onSaveApiKey(ApiKeyType.CLAUDE, it)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("onboarding_claude_key"),
+            label = { Text("Anthropic Claude API Key (Optional)") },
+            placeholder = { Text("sk-ant-...") },
+            singleLine = true,
+            visualTransformation = if (showClaude) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { showClaude = !showClaude }) {
+                    Icon(
+                        imageVector = if (showClaude) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = "Toggle key visibility"
+                    )
+                }
+            }
+        )
+        OnboardingDirectKeyLink(
+            label = if (isBn) "Anthropic Console থেকে কী নিন" else "Get a key at Anthropic Console",
+            onClick = { runCatching { uriHandler.openUri("https://console.anthropic.com/settings/keys") } }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         GlassCard(modifier = Modifier.fillMaxWidth(), contentPadding = 12.dp) {
             Text(
@@ -718,5 +792,33 @@ private fun ApiSetupSlide(
         ) {
             Text(if (isBn) "আপাতত স্কিপ করো (Skip for now)" else "Skip for now")
         }
+    }
+}
+
+@Composable
+private fun OnboardingDirectKeyLink(
+    label: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp, horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = AccentVioletBright,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+            contentDescription = label,
+            tint = AccentVioletBright,
+            modifier = Modifier.size(14.dp)
+        )
     }
 }

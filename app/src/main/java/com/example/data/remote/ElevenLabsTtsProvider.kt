@@ -2,6 +2,7 @@ package com.example.data.remote
 
 import com.example.data.local.ApiKeyType
 import com.example.data.local.SecureStorageManager
+import com.example.data.model.VoiceOption
 import com.example.data.model.VoiceProviderType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -72,6 +73,62 @@ class ElevenLabsTtsProvider(
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    suspend fun fetchMyVoices(apiKey: String): Result<List<VoiceOption>> = withContext(Dispatchers.IO) {
+        val trimmed = apiKey.trim()
+        if (trimmed.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("ElevenLabs API Key দিন।"))
+        }
+        val request = Request.Builder()
+            .url("https://api.elevenlabs.io/v1/voices")
+            .addHeader("xi-api-key", trimmed)
+            .get()
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(
+                        IllegalStateException("ভয়েস তালিকা আনা যায়নি (HTTP ${response.code})")
+                    )
+                }
+                val raw = response.body?.string().orEmpty()
+                val json = JSONObject(raw)
+                val voicesArr = json.optJSONArray("voices") ?: return@withContext Result.success(emptyList())
+                val parsed = mutableListOf<VoiceOption>()
+                for (i in 0 until voicesArr.length()) {
+                    val v = voicesArr.optJSONObject(i) ?: continue
+                    val id = v.optString("voice_id")
+                    val name = v.optString("name")
+                    if (id.isBlank() || name.isBlank()) continue
+                    val labels = v.optJSONObject("labels")
+                    val gender = labels?.optString("gender").orEmpty()
+                    val accent = labels?.optString("accent").orEmpty()
+                    val category = v.optString("category")
+                    val descParts = listOf(gender, accent, category).filter { it.isNotBlank() }
+                    val desc = if (descParts.isEmpty()) "ElevenLabs Voice" else descParts.joinToString(" • ")
+                    parsed.add(
+                        VoiceOption(
+                            voiceId = id,
+                            name = name,
+                            descriptionBn = desc,
+                            descriptionEn = desc,
+                            provider = VoiceProviderType.ELEVENLABS,
+                            isCustom = category != "premade"
+                        )
+                    )
+                }
+                // Prioritize female / cloned / personal voices first
+                val sorted = parsed.sortedWith(
+                    compareByDescending<VoiceOption> { it.isCustom }
+                        .thenByDescending { it.descriptionEn.contains("female", ignoreCase = true) }
+                )
+                Result.success(sorted)
+            }
+        } catch (e: Exception) {
+            Result.failure(IllegalStateException(e.localizedMessage ?: "ভয়েস লোড ব্যর্থ হয়েছে।"))
         }
     }
 

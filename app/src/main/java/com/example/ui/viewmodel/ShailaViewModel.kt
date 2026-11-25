@@ -19,7 +19,11 @@ import com.example.data.model.AppSettings
 import com.example.data.model.ChatMessage
 import com.example.data.model.ContentToolType
 import com.example.data.model.GalleryMediaItem
+import com.example.data.model.GeminiLiveVoice
+import com.example.data.model.HomeCharacterStyle
 import com.example.data.model.MemoryItem
+import com.example.data.model.PersonalityPreset
+import com.example.data.model.ResponseStyle
 import com.example.data.model.SpeechLanguage
 import com.example.data.model.ToolLength
 import com.example.data.model.ToolTone
@@ -31,9 +35,14 @@ import com.example.data.remote.AppUpdateManager
 import com.example.data.remote.BuildVersionInfo
 import com.example.data.remote.ClaudeApiService
 import com.example.data.remote.DownloadProgressState
+import com.example.data.remote.GeminiLiveManager
+import com.example.data.remote.GroqAndGeminiRestService
+import com.example.data.remote.LiveCallSessionState
+import com.example.data.remote.LiveCallStatus
 import com.example.data.remote.ShailaAiException
 import com.example.data.remote.VoiceEngine
 import com.example.data.repository.ShailaRepository
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,8 +50,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 enum class OrbState {
@@ -87,7 +98,9 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
     private val settingsStore = SettingsDataStore(application)
     private val secureStorage = SecureStorageManager(application)
     private val claudeService = ClaudeApiService()
+    private val groqGeminiService = GroqAndGeminiRestService()
     private val voiceEngine = VoiceEngine(application, secureStorage)
+    private val geminiLiveManager = GeminiLiveManager(application, groqGeminiService)
     private val appUpdateManager = AppUpdateManager(application)
     private val apkDownloader = ApkDownloader(application)
     val frameExtractor = VideoFrameExtractor(application)
@@ -100,7 +113,8 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         secureStorage = secureStorage,
         claudeService = claudeService,
         voiceEngine = voiceEngine,
-        frameExtractor = frameExtractor
+        frameExtractor = frameExtractor,
+        restService = groqGeminiService
     )
 
     val settings: StateFlow<AppSettings> = repository.settingsFlow.stateIn(
@@ -137,6 +151,28 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
 
     val rmsLevel: StateFlow<Float> = speechManager.rmsLevel
 
+    val speakingLevel: StateFlow<Float> = combine(
+        geminiLiveManager.speakingLevel,
+        voiceEngine.ttsSpeechLevel
+    ) { liveLevel, ttsLevel ->
+        maxOf(liveLevel, ttsLevel)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+
+    val liveMicLevel: StateFlow<Float> = combine(
+        geminiLiveManager.micLevel,
+        speechManager.rmsLevel
+    ) { liveMic, sttRms ->
+        maxOf(liveMic, sttRms)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+
+    private val _fallbackLiveState = MutableStateFlow(LiveCallSessionState())
+    val liveCallState: StateFlow<LiveCallSessionState> = combine(
+        geminiLiveManager.sessionState,
+        _fallbackLiveState
+    ) { geminiState, fallbackState ->
+        if (geminiState.status != LiveCallStatus.IDLE) geminiState else fallbackState
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, LiveCallSessionState())
+
     private val _orbState = MutableStateFlow(OrbState.IDLE)
     val orbState: StateFlow<OrbState> = _orbState.asStateFlow()
 
@@ -170,6 +206,9 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
     private val _voicePreviewStatus = MutableStateFlow<String?>(null)
     val voicePreviewStatus: StateFlow<String?> = _voicePreviewStatus.asStateFlow()
 
+    private val _isLoadingElevenVoices = MutableStateFlow(false)
+    val isLoadingElevenVoices: StateFlow<Boolean> = _isLoadingElevenVoices.asStateFlow()
+
     private val _apkUpdateState = MutableStateFlow(
         ApkUpdateUiState(buildInfo = appUpdateManager.getCurrentBuildInfo())
     )
@@ -178,6 +217,8 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
     private var hasGreetedThisSession = false
     private var voiceJob: Job? = null
     private var apkDownloadJob: Job? = null
+    private var fallbackLiveJob: Job? = null
+    private var fallbackSpeechDeferred: CompletableDeferred<String?>? = null
     private var pendingGalleryVoiceTarget: GalleryMediaItem? = null
 
     init {
@@ -201,28 +242,43 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                     is SpeechEvent.Partial -> {
                         _orbState.value = OrbState.LISTENING
                         _partialTranscript.value = event.text
+                        if (_fallbackLiveState.value.isActive) {
+                            _fallbackLiveState.value = _fallbackLiveState.value.copy(liveCaption = event.text)
+                        }
                     }
                     is SpeechEvent.FinalResult -> {
                         _partialTranscript.value = ""
                         speechManager.resetToIdle()
-                        val galleryTarget = pendingGalleryVoiceTarget
-                        if (galleryTarget != null) {
-                            pendingGalleryVoiceTarget = null
-                            analyzeSelectedGalleryMedia(
-                                customQuestion = event.text,
-                                outputLanguage = settings.value.appLanguage
-                            )
+                        val liveDeferred = fallbackSpeechDeferred
+                        if (liveDeferred != null && !liveDeferred.isCompleted) {
+                            fallbackSpeechDeferred = null
+                            liveDeferred.complete(event.text)
                         } else {
-                            submitUserMessage(event.text, fromVoice = true)
+                            val galleryTarget = pendingGalleryVoiceTarget
+                            if (galleryTarget != null) {
+                                pendingGalleryVoiceTarget = null
+                                analyzeSelectedGalleryMedia(
+                                    customQuestion = event.text,
+                                    outputLanguage = settings.value.appLanguage
+                                )
+                            } else {
+                                submitUserMessage(event.text, fromVoice = true)
+                            }
                         }
                     }
                     is SpeechEvent.Error -> {
                         _partialTranscript.value = ""
                         _orbState.value = OrbState.IDLE
                         pendingGalleryVoiceTarget = null
-                        val isBn = settings.value.appLanguage == AppLanguage.BENGALI
-                        _statusMessage.value = if (isBn) event.messageBn else event.messageEn
                         speechManager.resetToIdle()
+                        val liveDeferred = fallbackSpeechDeferred
+                        if (liveDeferred != null && !liveDeferred.isCompleted) {
+                            fallbackSpeechDeferred = null
+                            liveDeferred.complete(null)
+                        } else {
+                            val isBn = settings.value.appLanguage == AppLanguage.BENGALI
+                            _statusMessage.value = if (isBn) event.messageBn else event.messageEn
+                        }
                     }
                 }
             }
@@ -238,12 +294,25 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         val current = settings.value
         if (!current.onboardingCompleted) return
         hasGreetedThisSession = true
-        if (!current.autoSpeakReplies) return
+
+        if (!current.autoSpeakReplies) {
+            if (current.listenOnAppOpen && _hasMicPermission.value) {
+                viewModelScope.launch {
+                    delay(450)
+                    startVoiceListening()
+                }
+            }
+            return
+        }
 
         val greeting = repository.getGreetingText(current.appLanguage)
         viewModelScope.launch {
             delay(450)
-            speakOut(greeting, allowContinuousNext = false)
+            speakOut(
+                text = greeting,
+                allowContinuousNext = false,
+                listenAfterComplete = current.listenOnAppOpen
+            )
         }
     }
 
@@ -264,6 +333,134 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         pendingGalleryVoiceTarget = null
         speechManager.cancel()
         _orbState.value = OrbState.IDLE
+    }
+
+    // --- Real-Time Live Voice Call Controls ---
+    fun startLiveCall() {
+        endLiveCall()
+        stopSpeaking()
+        speechManager.cancel()
+
+        val currentSettings = settings.value
+        val keys = apiKeys.value
+        val isBn = currentSettings.appLanguage == AppLanguage.BENGALI
+
+        if (keys.geminiKey.isNotBlank()) {
+            viewModelScope.launch {
+                val prompt = repository.buildLiveSystemPrompt()
+                geminiLiveManager.startSession(
+                    apiKey = keys.geminiKey,
+                    voice = currentSettings.geminiLiveVoice,
+                    systemPrompt = prompt,
+                    language = currentSettings.appLanguage,
+                    onTranscriptTurn = { userText, assistantText ->
+                        viewModelScope.launch {
+                            repository.saveLiveConversationTurn(userText, assistantText)
+                        }
+                    }
+                )
+            }
+            return
+        }
+
+        if (keys.hasAnyChatBrainKey()) {
+            startFallbackLiveCallLoop()
+            return
+        }
+
+        _fallbackLiveState.value = LiveCallSessionState(
+            status = LiveCallStatus.ERROR,
+            modeLabel = "Live Call",
+            errorMessage = if (isBn) {
+                "লাইভ কলের জন্য Settings → API Keys থেকে একটি ফ্রি Gemini বা Groq Key যোগ করুন।"
+            } else {
+                "Please add a free Gemini or Groq API key in Settings → API Keys to start a Live Call."
+            }
+        )
+    }
+
+    private fun startFallbackLiveCallLoop() {
+        val currentSettings = settings.value
+        val isBn = currentSettings.appLanguage == AppLanguage.BENGALI
+        fallbackLiveJob?.cancel()
+        fallbackLiveJob = viewModelScope.launch {
+            _fallbackLiveState.value = LiveCallSessionState(
+                status = LiveCallStatus.LISTENING,
+                modeLabel = "${currentSettings.voiceProvider.titleEn} • Voice Loop",
+                liveCaption = if (isBn) "শাইলা শুনছে... কথা বলুন" else "Shaila is listening..."
+            )
+            while (isActive && _fallbackLiveState.value.isActive) {
+                if (_fallbackLiveState.value.isMuted) {
+                    delay(200)
+                    continue
+                }
+                _fallbackLiveState.value = _fallbackLiveState.value.copy(
+                    status = LiveCallStatus.LISTENING,
+                    liveCaption = if (isBn) "শুনছি..." else "Listening..."
+                )
+                val deferred = CompletableDeferred<String?>()
+                fallbackSpeechDeferred = deferred
+                speechManager.startListening(currentSettings.speechLanguage, currentSettings.appLanguage)
+                val transcript = deferred.await()
+                if (!isActive || !_fallbackLiveState.value.isActive) break
+                if (transcript.isNullOrBlank()) {
+                    delay(350)
+                    continue
+                }
+                _fallbackLiveState.value = _fallbackLiveState.value.copy(
+                    status = LiveCallStatus.CONNECTING,
+                    liveCaption = transcript
+                )
+                val res = repository.askAssistant(transcript)
+                val replyText = res.getOrNull()?.text
+                if (replyText.isNullOrBlank()) {
+                    delay(400)
+                    continue
+                }
+                if (!isActive || !_fallbackLiveState.value.isActive) break
+                _fallbackLiveState.value = _fallbackLiveState.value.copy(
+                    status = LiveCallStatus.SPEAKING,
+                    liveCaption = replyText.take(110)
+                )
+                repository.speakReply(replyText)
+                delay(220)
+            }
+        }
+    }
+
+    fun toggleLiveMute() {
+        if (geminiLiveManager.sessionState.value.status != LiveCallStatus.IDLE) {
+            geminiLiveManager.toggleMute()
+        } else {
+            val nextMute = !_fallbackLiveState.value.isMuted
+            _fallbackLiveState.value = _fallbackLiveState.value.copy(isMuted = nextMute)
+            if (nextMute) {
+                fallbackSpeechDeferred?.complete(null)
+                fallbackSpeechDeferred = null
+                speechManager.cancel()
+            }
+        }
+    }
+
+    fun setLiveMinimized(minimized: Boolean) {
+        if (geminiLiveManager.sessionState.value.status != LiveCallStatus.IDLE) {
+            geminiLiveManager.setMinimized(minimized)
+        } else {
+            _fallbackLiveState.value = _fallbackLiveState.value.copy(isMinimized = minimized)
+        }
+    }
+
+    fun endLiveCall() {
+        geminiLiveManager.endSession()
+        fallbackLiveJob?.cancel()
+        fallbackLiveJob = null
+        fallbackSpeechDeferred?.complete(null)
+        fallbackSpeechDeferred = null
+        if (_fallbackLiveState.value.status != LiveCallStatus.IDLE) {
+            speechManager.cancel()
+            voiceEngine.stop()
+            _fallbackLiveState.value = LiveCallSessionState(status = LiveCallStatus.IDLE)
+        }
     }
 
     fun submitUserMessage(rawText: String, fromVoice: Boolean = false, bypassSafetyCheck: Boolean = false) {
@@ -317,14 +514,20 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         _pendingSafetyPrompt.value = null
     }
 
-    fun speakOut(text: String, allowContinuousNext: Boolean = false) {
+    fun speakOut(
+        text: String,
+        allowContinuousNext: Boolean = false,
+        listenAfterComplete: Boolean = false
+    ) {
         voiceJob?.cancel()
         voiceJob = viewModelScope.launch {
             _orbState.value = OrbState.SPEAKING
             val outcome = repository.speakReply(text)
             _activeVoiceSource.value = outcome.usedProviderLabel
             _orbState.value = OrbState.IDLE
-            if (allowContinuousNext && settings.value.continuousConversation && _hasMicPermission.value) {
+            val shouldListen = ((allowContinuousNext && settings.value.continuousConversation) || listenAfterComplete) &&
+                _hasMicPermission.value
+            if (shouldListen) {
                 delay(350)
                 startVoiceListening()
             }
@@ -504,6 +707,33 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setGeminiLiveVoice(voice: GeminiLiveVoice) {
+        viewModelScope.launch { repository.setGeminiLiveVoice(voice) }
+    }
+
+    fun loadMyElevenLabsVoices() {
+        _isLoadingElevenVoices.value = true
+        _voicePreviewStatus.value = "ElevenLabs থেকে আপনার ভয়েস আনা হচ্ছে..."
+        viewModelScope.launch {
+            val res = repository.fetchMyElevenLabsVoices()
+            _isLoadingElevenVoices.value = false
+            _voicePreviewStatus.value = res.fold(
+                onSuccess = { list -> "${list.size} টি ElevenLabs ভয়েস লোড হয়েছে!" },
+                onFailure = { err -> err.localizedMessage ?: "ভয়েস লোড করা যায়নি" }
+            )
+        }
+    }
+
+    fun addCustomElevenLabsVoice(voiceId: String, name: String) {
+        viewModelScope.launch {
+            val res = repository.addCustomElevenLabsVoice(voiceId, name)
+            _voicePreviewStatus.value = res.fold(
+                onSuccess = { v -> "${v.name} (${v.voiceId}) সেভ ও সিলেক্ট করা হয়েছে!" },
+                onFailure = { err -> err.localizedMessage ?: "সঠিক Voice ID দিন" }
+            )
+        }
+    }
+
     fun completeOnboarding() {
         viewModelScope.launch { repository.setOnboardingCompleted(true) }
     }
@@ -558,6 +788,42 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setAccentPreset(preset: AccentColorPreset) {
         viewModelScope.launch { repository.setAccentPreset(preset) }
+    }
+
+    fun setAssistantName(name: String) {
+        viewModelScope.launch { repository.setAssistantName(name) }
+    }
+
+    fun setPersonalityPreset(preset: PersonalityPreset) {
+        viewModelScope.launch { repository.setPersonalityPreset(preset) }
+    }
+
+    fun setCustomPersonality(name: String, prompt: String) {
+        viewModelScope.launch { repository.setCustomPersonality(name, prompt) }
+    }
+
+    fun setResponseStyle(style: ResponseStyle) {
+        viewModelScope.launch { repository.setResponseStyle(style) }
+    }
+
+    fun setHomeCharacterStyle(style: HomeCharacterStyle) {
+        viewModelScope.launch { repository.setHomeCharacterStyle(style) }
+    }
+
+    fun setCustomCharacterUri(uri: String) {
+        viewModelScope.launch { repository.setCustomCharacterUri(uri) }
+    }
+
+    fun setShowHerEverywhere(enabled: Boolean) {
+        viewModelScope.launch { repository.setShowHerEverywhere(enabled) }
+    }
+
+    fun setReduceMotion(enabled: Boolean) {
+        viewModelScope.launch { repository.setReduceMotion(enabled) }
+    }
+
+    fun setListenOnAppOpen(enabled: Boolean) {
+        viewModelScope.launch { repository.setListenOnAppOpen(enabled) }
     }
 
     fun setApkUpdateUrl(url: String) {
@@ -683,6 +949,7 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        endLiveCall()
         speechManager.destroy()
         voiceEngine.release()
     }
