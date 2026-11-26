@@ -112,6 +112,11 @@ class GeminiLiveManager(
     @Volatile
     private var manualStopRequested = false
 
+    @Volatile
+    private var cachedModelsKey: String = ""
+    @Volatile
+    private var cachedLiveModels: List<String> = emptyList()
+
     fun startSession(
         apiKey: String,
         voice: GeminiLiveVoice,
@@ -147,21 +152,41 @@ class GeminiLiveManager(
             liveCaption = if (language == AppLanguage.BENGALI) "শাইলার সাথে সংযুক্ত হচ্ছে..." else "Connecting to Shaila..."
         )
 
-        sessionJob = scope.launch {
-            val candidateModels = restService.discoverLiveModels(key)
-            val modelName = candidateModels.firstOrNull()
-                ?: "models/gemini-2.5-flash-native-audio-preview-12-2025"
-            openWebSocket(
-                apiKey = key,
-                candidateModels = candidateModels,
-                modelIndex = 0,
-                initialModel = modelName,
-                voice = voice,
-                systemPrompt = systemPrompt,
-                language = language,
-                onTranscriptTurn = onTranscriptTurn,
-                onToolCall = onToolCall
-            )
+        val fastDefaults = listOf(
+            "models/gemini-2.5-flash-native-audio-preview-12-2025",
+            "models/gemini-2.5-flash-native-audio-preview-09-2025",
+            "models/gemini-2.0-flash-live-001",
+            "models/gemini-2.0-flash-exp"
+        )
+        val initialCandidates = if (cachedModelsKey == key && cachedLiveModels.isNotEmpty()) {
+            cachedLiveModels
+        } else {
+            fastDefaults
+        }
+        val firstModel = initialCandidates.first()
+
+        // Connect WebSocket immediately without waiting for a slow /models REST roundtrip
+        openWebSocket(
+            apiKey = key,
+            candidateModels = initialCandidates,
+            modelIndex = 0,
+            initialModel = firstModel,
+            voice = voice,
+            systemPrompt = systemPrompt,
+            language = language,
+            onTranscriptTurn = onTranscriptTurn,
+            onToolCall = onToolCall
+        )
+
+        // Warm model discovery cache in background for future sessions/fallbacks
+        if (cachedModelsKey != key || cachedLiveModels.isEmpty()) {
+            sessionJob = scope.launch {
+                val discovered = restService.discoverLiveModels(key)
+                if (discovered.isNotEmpty()) {
+                    cachedModelsKey = key
+                    cachedLiveModels = discovered
+                }
+            }
         }
     }
 
@@ -352,12 +377,12 @@ class GeminiLiveManager(
                                         "automaticActivityDetection",
                                         JSONObject().apply {
                                             put("disabled", false)
-                                            // LOW start sensitivity prevents room hiss, breathing, and tail echoes
-                                            // from triggering phantom assistant turns when nobody is speaking.
-                                            put("startOfSpeechSensitivity", "START_SENSITIVITY_LOW")
+                                            // Client-side gate already zeroes out room hiss & echo windows,
+                                            // so server VAD can start immediately on real speech and end in 170ms.
+                                            put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
                                             put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
-                                            put("prefixPaddingMs", 80)
-                                            put("silenceDurationMs", 380)
+                                            put("prefixPaddingMs", 50)
+                                            put("silenceDurationMs", 170)
                                         }
                                     )
                                 )
@@ -612,13 +637,13 @@ class GeminiLiveManager(
             assistantBuffer.clear()
             if (_sessionState.value.status == LiveCallStatus.SPEAKING) {
                 scope.launch {
-                    // Wait until AudioTrack playback finishes and room echo fades before switching to LISTENING
+                    // Wait until AudioTrack playback drains and room echo fades before switching to LISTENING
                     while (isActive && !manualStopRequested) {
                         val quietFor = System.currentTimeMillis() - lastAudioWriteAtMs
-                        if (quietFor >= 680L) break
-                        delay((700L - quietFor).coerceIn(120L, 450L))
+                        if (quietFor >= 500L) break
+                        delay((520L - quietFor).coerceIn(90L, 350L))
                     }
-                    if (!manualStopRequested && System.currentTimeMillis() - lastAudioWriteAtMs >= 650L) {
+                    if (!manualStopRequested && System.currentTimeMillis() - lastAudioWriteAtMs >= 480L) {
                         _speakingLevel.value = 0f
                         _sessionState.value = _sessionState.value.copy(
                             status = LiveCallStatus.LISTENING,
@@ -857,8 +882,8 @@ class GeminiLiveManager(
                     val now = System.currentTimeMillis()
                     val rms = PcmAudioProcessor.computePcm16RmsNormalized(buffer, read)
                     val msSinceSpeakerAudio = now - lastAudioWriteAtMs
-                    val isEchoWindow = state.status == LiveCallStatus.SPEAKING || msSinceSpeakerAudio < 750L
-                    val inManualInterruptCooldown = now - manualInterruptAtMs < 220L
+                    val isEchoWindow = state.status == LiveCallStatus.SPEAKING || msSinceSpeakerAudio < 560L
+                    val inManualInterruptCooldown = now - manualInterruptAtMs < 200L
 
                     val shouldTransmitMic: Boolean = when {
                         inManualInterruptCooldown -> false
@@ -866,11 +891,11 @@ class GeminiLiveManager(
                             // Anti-loop echo gate: suppress speaker playback echo while still allowing
                             // genuine sustained close-mic barge-in from the user.
                             val bargeThreshold = if (state.isSpeakerOn) {
-                                maxOf(0.58f, _speakingLevel.value * 0.90f + 0.32f)
+                                maxOf(0.56f, _speakingLevel.value * 0.88f + 0.30f)
                             } else {
-                                0.16f
+                                0.15f
                             }
-                            val neededFrames = if (state.isSpeakerOn) 8 else 3 // 160ms speaker / 60ms earpiece
+                            val neededFrames = if (state.isSpeakerOn) 7 else 3 // 140ms speaker / 60ms earpiece
                             if (rms >= bargeThreshold) {
                                 bargeInConsecutiveFrames++
                             } else {
@@ -881,7 +906,7 @@ class GeminiLiveManager(
                                 flushAudioTrack()
                                 _speakingLevel.value = 0f
                                 _sessionState.value = state.copy(status = LiveCallStatus.LISTENING)
-                                speechHangoverUntilMs = now + 450L
+                                speechHangoverUntilMs = now + 260L
                                 true
                             } else {
                                 false
@@ -889,9 +914,10 @@ class GeminiLiveManager(
                         }
                         else -> {
                             bargeInConsecutiveFrames = 0
-                            // Ambient noise gate: ignore static room noise when nobody is talking
-                            if (rms >= 0.048f) {
-                                speechHangoverUntilMs = now + 350L
+                            // Tight ambient noise gate: sends digital silence when nobody speaks,
+                            // and keeps only 110ms hangover so Gemini Live responds instantly after speech ends.
+                            if (rms >= 0.036f) {
+                                speechHangoverUntilMs = now + 110L
                                 true
                             } else {
                                 now < speechHangoverUntilMs

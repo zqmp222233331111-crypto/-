@@ -53,7 +53,7 @@ class ElevenLabsTtsProvider(
         }
 
         val request = Request.Builder()
-            .url("https://api.elevenlabs.io/v1/text-to-speech/$voiceId/stream?optimize_streaming_latency=2")
+            .url("https://api.elevenlabs.io/v1/text-to-speech/$voiceId/stream?optimize_streaming_latency=3")
             .addHeader("xi-api-key", apiKey.trim())
             .addHeader("Content-Type", "application/json")
             .addHeader("Accept", "audio/mpeg")

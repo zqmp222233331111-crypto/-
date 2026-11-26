@@ -114,16 +114,17 @@ class ShailaRepository(
             assistantName = settings.assistantName,
             personalityPreset = settings.personalityPreset,
             customPersonalityPrompt = settings.customPersonalityPrompt,
-            responseStyle = settings.responseStyle
+            responseStyle = settings.responseStyle,
+            includeTagControlInstructions = false
         )
         return """
             $base
 
             LIVE VOICE CALL MODE (ULTRA-FAST HUMAN RESPONSE):
             - You are in a live real-time phone call with someone close to you.
-            - Start answering the instant the user finishes speaking—zero filler openings, zero robotic hesitation, zero AI disclaimers.
-            - Give clear, accurate, well-organized answers in 1 to 3 natural spoken sentences.
-            - Use your phone-control function tools IMMEDIATELY whenever the user asks to open an app, type, tap, scroll, search, dial, set an alarm, or toggle flashlight—never just say you opened an app without actually invoking the tool.
+            - Start answering the instant the user finishes speaking—zero filler openings, zero hesitation, zero AI disclaimers.
+            - Give clear, direct answers in 1 to 2 natural spoken sentences unless the user asks for details.
+            - Use your phone-control function tools IMMEDIATELY whenever asked to open an app, type, tap, scroll, dial, set an alarm, or toggle flashlight.
         """.trimIndent()
     }
 

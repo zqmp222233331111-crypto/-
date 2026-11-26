@@ -64,7 +64,8 @@ class ClaudeApiService {
         assistantName: String = "Shaila",
         personalityPreset: PersonalityPreset = PersonalityPreset.FRIENDLY,
         customPersonalityPrompt: String = "",
-        responseStyle: ResponseStyle = ResponseStyle.BALANCED
+        responseStyle: ResponseStyle = ResponseStyle.BALANCED,
+        includeTagControlInstructions: Boolean = true
     ): String {
         val cleanName = assistantName.trim().ifBlank { "Shaila" }
         val isDefaultShaila = cleanName.equals("Shaila", ignoreCase = true) || cleanName == "শাইলা"
@@ -101,7 +102,7 @@ class ClaudeApiService {
             "Be clear, accurate, thoughtful, well-structured, and deeply helpful like a dedicated human partner."
         }
 
-        val deviceControlBlock = if (spokenStyle) {
+        val deviceControlBlock = if (spokenStyle && includeTagControlInstructions) {
             """
             DEVICE CONTROL & APP AUTOMATION (REAL PHONE ACTIONS):
             - You CAN control the user's Android phone directly: open any installed app, type inside apps/keyboards, tap buttons, press Search/Send, scroll, turn flashlight on/off, open phone dialer, set alarms, open URLs, and navigate Back/Home.

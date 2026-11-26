@@ -53,8 +53,8 @@ class GroqAndGeminiRestService {
         val payload = JSONObject().apply {
             put("model", "llama-3.3-70b-versatile")
             put("messages", messagesArr)
-            put("temperature", 0.7)
-            put("max_tokens", 700)
+            put("temperature", 0.65)
+            put("max_tokens", 380)
         }.toString()
 
         var lastError: ShailaAiException = ShailaAiException.ServerError("Groq request failed")
@@ -142,7 +142,7 @@ class GroqAndGeminiRestService {
                 "generationConfig",
                 JSONObject().apply {
                     put("temperature", 0.65)
-                    put("maxOutputTokens", 500)
+                    put("maxOutputTokens", 380)
                     put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
                 }
             )
