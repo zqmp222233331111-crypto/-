@@ -16,33 +16,23 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Face
-import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.MotionPhotosOff
-import androidx.compose.material.icons.filled.PsychologyAlt
 import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
@@ -57,7 +47,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,7 +63,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -89,6 +77,7 @@ import com.example.data.model.ResponseStyle
 import com.example.data.model.ShailaCatalog
 import com.example.data.model.VoiceProviderType
 import com.example.ui.components.CroppedImage
+import com.example.ui.components.GlassCard
 import com.example.ui.theme.AccentVioletBright
 import com.example.ui.theme.AccentVioletPrimary
 import com.example.ui.theme.AccentVioletSecondary
@@ -108,8 +97,6 @@ fun LookAndFeelSection(
     onToggleReduceMotion: (Boolean) -> Unit
 ) {
     val ext = LocalShailaColors.current
-    var showCharacterDialog by remember { mutableStateOf(false) }
-
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -119,310 +106,286 @@ fun LookAndFeelSection(
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp, bottom = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        PanelRowButton(
-            icon = Icons.Filled.Face,
-            title = if (isBn) "হোম ক্যারেক্টার (Home Character)" else "Home Character",
-            subtitle = if (isBn) settings.homeCharacterStyle.titleBn else settings.homeCharacterStyle.titleEn,
-            modifier = Modifier.testTag("home_character_picker_row"),
-            onClick = { showCharacterDialog = true }
-        )
-
-        PanelSwitchRow(
-            icon = Icons.Filled.Visibility,
-            title = if (isBn) "সব জায়গায় শাইলাকে দেখান" else "Show Her Everywhere",
-            subtitle = if (isBn) {
-                "মাইক বাটন, চ্যাট ও মিনি কলেও তার ছবি দেখাবে"
-            } else {
-                "Show her portrait inside the mic button & mini pill"
-            },
-            checked = settings.showHerEverywhere,
-            modifier = Modifier.testTag("show_her_everywhere_switch"),
-            onCheckedChange = onToggleShowHerEverywhere
-        )
-
-        PanelSwitchRow(
-            icon = Icons.Filled.MotionPhotosOff,
-            title = if (isBn) "নড়াচড়া কমান (Reduce Motion)" else "Reduce Motion",
-            subtitle = if (isBn) {
-                "হাত, মাথা ও শরীরের নড়াচড়া শান্ত ও ধীর রাখুন"
-            } else {
-                "Keep body, head, and gesture motion gentle and minimal"
-            },
-            checked = settings.reduceMotion,
-            modifier = Modifier.testTag("reduce_motion_switch"),
-            onCheckedChange = onToggleReduceMotion
-        )
-
-        HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 2.dp))
-
-        PanelSwitchRow(
-            icon = Icons.Filled.DarkMode,
-            title = if (isBn) "ডার্ক মোড (Dark Theme)" else "Dark Theme",
-            subtitle = if (isBn) "ডিপ নেভি-টু-ভায়োলেট গ্রেডিয়েন্ট" else "Deep navy-to-violet gradient",
-            checked = settings.darkTheme,
-            onCheckedChange = onToggleDarkTheme
-        )
-
-        Text(
-            text = if (isBn) "অ্যাকসেন্ট রঙ (Accent Color)" else "Accent Color",
-            style = MaterialTheme.typography.labelLarge
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            AccentColorPreset.entries.forEach { preset ->
-                val (c1, c2) = accentPair(preset)
-                val isSelected = settings.accentPreset == preset
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(c1, c2)))
-                        .then(
-                            if (isSelected) Modifier.border(3.dp, Color.White, CircleShape)
-                            else Modifier
-                        )
-                        .clickable { onSelectAccent(preset) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = preset.labelEn,
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    if (showCharacterDialog) {
-        HomeCharacterPickerDialog(
-            settings = settings,
-            imageRegions = imageRegions,
-            isBn = isBn,
-            onSelectStyle = { style ->
-                onSelectHomeCharacterStyle(style)
-            },
-            onPickGalleryPhoto = {
-                photoPickerLauncher.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
-            },
-            onDismiss = { showCharacterDialog = false }
-        )
-    }
-}
-
-@Composable
-private fun HomeCharacterPickerDialog(
-    settings: AppSettings,
-    imageRegions: ImageRegionsConfig,
-    isBn: Boolean,
-    onSelectStyle: (HomeCharacterStyle) -> Unit,
-    onPickGalleryPhoto: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val ext = LocalShailaColors.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
+        // Card 1: Home Character & Visual Presence (flat cards, no nested popups)
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp, contentPadding = 16.dp) {
             Text(
-                text = if (isBn) "হোম ক্যারেক্টার বেছে নিন" else "Home Character",
+                text = if (isBn) "হোম ও লাইভ কল ক্যারেক্টার" else "Home & Live Call Character",
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = if (isBn) {
-                        "হোম ও লাইভ কলে যাকে দেখতে চান বেছে নিন। কথা বলার সময় হাত, মাথা, চোখ ও ঠোঁট জীবন্তভাবে নড়বে।"
-                    } else {
-                        "Choose how your companion appears on Home & Live Call with responsive expressions and gesture motion."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Text(
+                text = if (isBn) {
+                    "হোম ও লাইভ কলে যাকে দেখতে চান সরাসরি এখান থেকেই বাছাই করুন।"
+                } else {
+                    "Pick how your companion appears on Home and Live Call."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Card 1: Half-Body Shaila Portrait
-                    val portraitSelected = settings.homeCharacterStyle == HomeCharacterStyle.HALF_BODY_SHAILA
-                    Surface(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(18.dp))
-                            .clickable { onSelectStyle(HomeCharacterStyle.HALF_BODY_SHAILA) }
-                            .testTag("char_option_portrait"),
-                        shape = RoundedCornerShape(18.dp),
-                        color = if (portraitSelected) AccentVioletPrimary.copy(alpha = 0.24f) else ext.glassFill,
-                        border = BorderStroke(
-                            if (portraitSelected) 2.dp else 1.dp,
-                            if (portraitSelected) AccentVioletBright else ext.glassBorder
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.shaila_character_portrait),
-                                contentDescription = "Shaila Portrait",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(132.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = if (isBn) "শাইলা পোর্ট্রেট" else "Shaila Portrait",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = if (portraitSelected) AccentVioletBright else MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = if (isBn) "অর্ধেক বডি" else "Half-body",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    // Card 2: Classic Glowing Orb
-                    val orbSelected = settings.homeCharacterStyle == HomeCharacterStyle.CLASSIC_ORB
-                    Surface(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(18.dp))
-                            .clickable { onSelectStyle(HomeCharacterStyle.CLASSIC_ORB) }
-                            .testTag("char_option_orb"),
-                        shape = RoundedCornerShape(18.dp),
-                        color = if (orbSelected) AccentVioletPrimary.copy(alpha = 0.24f) else ext.glassFill,
-                        border = BorderStroke(
-                            if (orbSelected) 2.dp else 1.dp,
-                            if (orbSelected) AccentVioletBright else ext.glassBorder
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(132.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color(0xFF140D2B)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CroppedImage(
-                                    region = imageRegions.avatarFace,
-                                    contentDescription = "Classic Orb",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .size(84.dp)
-                                        .clip(CircleShape)
-                                        .border(2.dp, AccentVioletSecondary, CircleShape)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = if (isBn) "ক্লাসিক অবতার" else "Classic Orb",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = if (orbSelected) AccentVioletBright else MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = if (isBn) "নিয়ন রিং" else "Glowing ring",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                // Card 3: Pick Custom Gallery Photo
-                val customSelected = settings.homeCharacterStyle == HomeCharacterStyle.CUSTOM_GALLERY
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                val portraitSelected = settings.homeCharacterStyle == HomeCharacterStyle.HALF_BODY_SHAILA
                 Surface(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { onPickGalleryPhoto() }
-                        .testTag("char_option_gallery"),
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (customSelected) AccentVioletPrimary.copy(alpha = 0.22f) else ext.glassFill,
+                        .weight(1f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable { onSelectHomeCharacterStyle(HomeCharacterStyle.HALF_BODY_SHAILA) }
+                        .testTag("char_option_portrait"),
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (portraitSelected) AccentVioletPrimary.copy(alpha = 0.24f) else ext.glassFill,
                     border = BorderStroke(
-                        if (customSelected) 1.5.dp else 1.dp,
-                        if (customSelected) AccentVioletBright else ext.glassBorder
+                        if (portraitSelected) 2.dp else 1.dp,
+                        if (portraitSelected) AccentVioletBright else ext.glassBorder
                     )
                 ) {
-                    Row(
-                        modifier = Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.padding(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        if (settings.customCharacterUri.isNotBlank()) {
-                            AsyncImage(
-                                model = Uri.parse(settings.customCharacterUri),
-                                contentDescription = "Custom photo",
+                        Image(
+                            painter = painterResource(id = R.drawable.shaila_character_portrait),
+                            contentDescription = "Shaila Portrait",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(132.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (isBn) "শাইলা পোর্ট্রেট" else "Shaila Portrait",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = if (portraitSelected) AccentVioletBright else MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (isBn) "অর্ধেক বডি" else "Half-body",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                val orbSelected = settings.homeCharacterStyle == HomeCharacterStyle.CLASSIC_ORB
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable { onSelectHomeCharacterStyle(HomeCharacterStyle.CLASSIC_ORB) }
+                        .testTag("char_option_orb"),
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (orbSelected) AccentVioletPrimary.copy(alpha = 0.24f) else ext.glassFill,
+                    border = BorderStroke(
+                        if (orbSelected) 2.dp else 1.dp,
+                        if (orbSelected) AccentVioletBright else ext.glassBorder
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(132.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF140D2B)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CroppedImage(
+                                region = imageRegions.avatarFace,
+                                contentDescription = "Classic Orb",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(10.dp))
+                                    .size(84.dp)
+                                    .clip(CircleShape)
+                                    .border(2.dp, AccentVioletSecondary, CircleShape)
                             )
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(AccentVioletPrimary.copy(alpha = 0.35f)),
-                                contentAlignment = Alignment.Center
-                            ) {
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (isBn) "ক্লাসিক অবতার" else "Classic Orb",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = if (orbSelected) AccentVioletBright else MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (isBn) "নিয়ন রিং" else "Glowing ring",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            val customSelected = settings.homeCharacterStyle == HomeCharacterStyle.CUSTOM_GALLERY
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable {
+                        photoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }
+                    .testTag("char_option_gallery"),
+                shape = RoundedCornerShape(16.dp),
+                color = if (customSelected) AccentVioletPrimary.copy(alpha = 0.22f) else ext.glassFill,
+                border = BorderStroke(
+                    if (customSelected) 1.5.dp else 1.dp,
+                    if (customSelected) AccentVioletBright else ext.glassBorder
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (settings.customCharacterUri.isNotBlank()) {
+                        AsyncImage(
+                            model = Uri.parse(settings.customCharacterUri),
+                            contentDescription = "Custom photo",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(AccentVioletPrimary.copy(alpha = 0.35f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.AddPhotoAlternate,
+                                contentDescription = null,
+                                tint = Color.White
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isBn) "গ্যালারি থেকে নিজের ছবি দিন" else "Pick Custom Gallery Photo",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (customSelected && settings.customCharacterUri.isNotBlank()) {
+                                if (isBn) "কাস্টম ছবি সক্রিয় — বদলাতে ট্যাপ করুন" else "Active — tap to choose another"
+                            } else {
+                                if (isBn) "ফোন থেকে যেকোনো পোর্ট্রেট ছবি বাছাই করুন" else "Choose any portrait photo from your phone"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = ext.glassBorder)
+            Spacer(modifier = Modifier.height(6.dp))
+
+            PanelSwitchRow(
+                icon = Icons.Filled.Visibility,
+                title = if (isBn) "সব জায়গায় শাইলাকে দেখান" else "Show Her Everywhere",
+                subtitle = if (isBn) {
+                    "মাইক বাটন ও মিনি কলেও তার ছবি দেখাবে"
+                } else {
+                    "Show her portrait inside the mic button & mini pill"
+                },
+                checked = settings.showHerEverywhere,
+                modifier = Modifier.testTag("show_her_everywhere_switch"),
+                onCheckedChange = onToggleShowHerEverywhere
+            )
+
+            PanelSwitchRow(
+                icon = Icons.Filled.MotionPhotosOff,
+                title = if (isBn) "নড়াচড়া কমান (Reduce Motion)" else "Reduce Motion",
+                subtitle = if (isBn) {
+                    "হাত, মাথা ও শরীরের নড়াচড়া শান্ত রাখুন"
+                } else {
+                    "Keep body, head, and gesture motion gentle and minimal"
+                },
+                checked = settings.reduceMotion,
+                modifier = Modifier.testTag("reduce_motion_switch"),
+                onCheckedChange = onToggleReduceMotion
+            )
+        }
+
+        // Card 2: Theme & Accent Color
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp, contentPadding = 16.dp) {
+            Text(
+                text = if (isBn) "থিম ও রঙ (Theme & Color)" else "Theme & Color",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            PanelSwitchRow(
+                icon = Icons.Filled.DarkMode,
+                title = if (isBn) "ডার্ক মোড (Dark Theme)" else "Dark Theme",
+                subtitle = if (isBn) "ডিপ নেভি-টু-ভায়োলেট গ্রেডিয়েন্ট" else "Deep navy-to-violet gradient",
+                checked = settings.darkTheme,
+                onCheckedChange = onToggleDarkTheme
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (isBn) "অ্যাকসেন্ট রঙ (Accent Color)" else "Accent Color",
+                style = MaterialTheme.typography.labelLarge
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AccentColorPreset.entries.forEach { preset ->
+                    val (c1, c2) = accentPair(preset)
+                    val isSelected = settings.accentPreset == preset
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .clickable { onSelectAccent(preset) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Brush.linearGradient(listOf(c1, c2)))
+                                .then(
+                                    if (isSelected) Modifier.border(3.dp, Color.White, CircleShape)
+                                    else Modifier
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
                                 Icon(
-                                    imageVector = Icons.Filled.AddPhotoAlternate,
-                                    contentDescription = null,
-                                    tint = Color.White
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = preset.labelEn,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (isBn) "গ্যালারি থেকে নিজের ছবি দিন" else "Pick Custom Gallery Photo",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = if (customSelected && settings.customCharacterUri.isNotBlank()) {
-                                    if (isBn) "কাস্টম ছবি সক্রিয় — বদলাতে ট্যাপ করুন" else "Active — tap to choose another"
-                                } else {
-                                    if (isBn) "ফোন থেকে যেকোনো পোর্ট্রেট ছবি বাছাই করুন" else "Choose any portrait photo from your phone"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(if (isBn) "বন্ধ করুন" else "Close")
-            }
         }
-    )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -448,371 +411,10 @@ fun VoiceAndPersonalitySection(
     onChangeStyle: (Float) -> Unit
 ) {
     val ext = LocalShailaColors.current
-    var showNameDialog by remember { mutableStateOf(false) }
-    var showPersonalityDialog by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp, bottom = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        PanelRowButton(
-            icon = Icons.Filled.Badge,
-            title = if (isBn) "সহকারীর নাম (Assistant Name)" else "Assistant Name",
-            subtitle = settings.assistantName,
-            modifier = Modifier.testTag("assistant_name_row"),
-            onClick = { showNameDialog = true }
-        )
-
-        PanelRowButton(
-            icon = Icons.Filled.PsychologyAlt,
-            title = if (isBn) "ব্যক্তিত্ব ও মেজাজ (Personality)" else "Personality",
-            subtitle = settings.effectivePersonalityLabel(isBn),
-            modifier = Modifier.testTag("personality_picker_row"),
-            onClick = { showPersonalityDialog = true }
-        )
-
-        Text(
-            text = if (isBn) "উত্তরের ধরন (Response Style)" else "Response Style",
-            style = MaterialTheme.typography.labelLarge,
-            color = AccentVioletSecondary
-        )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ResponseStyle.entries.forEach { style ->
-                FilterChip(
-                    selected = settings.responseStyle == style,
-                    onClick = { onSelectResponseStyle(style) },
-                    label = { Text(if (isBn) style.titleBn else style.titleEn) }
-                )
-            }
-        }
-
-        PanelSwitchRow(
-            icon = Icons.Filled.Hearing,
-            title = if (isBn) "অ্যাপ খুললেই কথা শুনবে" else "Listen When App Opens",
-            subtitle = if (isBn) {
-                "চালু করলে হোমে আসার সাথে সাথেই মাইক প্রস্তুত হবে"
-            } else {
-                "Automatically start listening when opening Home"
-            },
-            checked = settings.listenOnAppOpen,
-            modifier = Modifier.testTag("listen_on_app_open_switch"),
-            onCheckedChange = onToggleListenOnAppOpen
-        )
-
-        HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 4.dp))
-
-        Text(
-            text = if (isBn) {
-                "Gemini Live কণ্ঠ (আসল মানুষের মতো ফিমেল ভয়েস)"
-            } else {
-                "Gemini Live Voice (Natural Human Female)"
-            },
-            style = MaterialTheme.typography.labelLarge,
-            color = AccentVioletSecondary
-        )
-        Text(
-            text = if (isBn) {
-                "লাইভ কল ও হোম-চ্যাটের উত্তরে এই স্বাভাবিক নারী কণ্ঠে কথা বলবে (Gemini Key থাকলেই কাজ করবে)।"
-            } else {
-                "Used for both real-time Live Calls and Home/Chat replies whenever a Gemini key is configured."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        GeminiLiveVoice.entries.forEach { gVoice ->
-            val isSelected = settings.geminiLiveVoice == gVoice
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.small)
-                    .clickable { onSelectGeminiVoice(gVoice) }
-                    .testTag("gemini_voice_${gVoice.voiceName}")
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(
-                    selected = isSelected,
-                    onClick = { onSelectGeminiVoice(gVoice) }
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (isBn) gVoice.titleBn else gVoice.titleEn,
-                        style = MaterialTheme.typography.titleSmall
-                    )
-                    Text(
-                        text = if (isBn) gVoice.descriptionBn else gVoice.descriptionEn,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-        HorizontalDivider(color = ext.glassBorder, modifier = Modifier.padding(vertical = 4.dp))
-
-        Text(
-            text = if (isBn) "চ্যাট ও রিড-আলাউড ভয়েস প্রোভাইডার" else "Chat & Read-Aloud Voice Provider",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.secondary
-        )
-        VoiceProviderType.entries.forEach { provider ->
-            val selected = settings.voiceProvider == provider
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.medium)
-                    .clickable { onSelectVoiceProvider(provider) }
-                    .padding(vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(
-                    selected = selected,
-                    onClick = { onSelectVoiceProvider(provider) }
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (isBn) provider.titleBn else provider.titleEn,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = provider.subtitleBn,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-        Text(
-            text = if (isBn) "উপলব্ধ ভয়েসসমূহ (${settings.voiceProvider.titleEn})" else "Available Voices (${settings.voiceProvider.titleEn})",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.secondary
-        )
-        if (voicePreviewStatus != null) {
-            Text(
-                text = voicePreviewStatus,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        val voices = if (settings.voiceProvider == VoiceProviderType.ELEVENLABS) {
-            settings.allElevenLabsVoices()
-        } else {
-            ShailaCatalog.voicesFor(settings.voiceProvider)
-        }
-        val selectedVoiceId = settings.currentVoiceId()
-        voices.forEach { voice ->
-            val isSelected = voice.voiceId == selectedVoiceId
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.small)
-                    .clickable { onSelectVoice(settings.voiceProvider, voice.voiceId) }
-                    .padding(vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(
-                    selected = isSelected,
-                    onClick = { onSelectVoice(settings.voiceProvider, voice.voiceId) }
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (voice.isCustom) "${voice.name} ★" else voice.name,
-                        style = MaterialTheme.typography.titleSmall
-                    )
-                    Text(
-                        text = if (isBn) voice.descriptionBn else voice.descriptionEn,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                FilledTonalButton(
-                    onClick = { onPreviewVoice(settings.voiceProvider, voice.voiceId) },
-                    modifier = Modifier.testTag("preview_voice_${voice.voiceId}")
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (isBn) "শুনে দেখো" else "Preview")
-                }
-            }
-        }
-
-        if (settings.voiceProvider == VoiceProviderType.ELEVENLABS) {
-            OutlinedButton(
-                onClick = onLoadMyElevenLabsVoices,
-                enabled = !isLoadingElevenVoices,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("load_elevenlabs_voices_button")
-            ) {
-                if (isLoadingElevenVoices) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.width(6.dp))
-                } else {
-                    Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                }
-                Text(if (isBn) "আমার ElevenLabs ভয়েস লোড করুন" else "Load My ElevenLabs Voices")
-            }
-
-            var customId by rememberSaveable { mutableStateOf("") }
-            var customName by rememberSaveable { mutableStateOf("") }
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = ext.glassFill,
-                border = BorderStroke(1.dp, ext.glassBorder),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = if (isBn) "যেকোনো সুন্দর ফিমেল Voice ID বসান" else "Paste Any Custom Female Voice ID",
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                    OutlinedTextField(
-                        value = customId,
-                        onValueChange = { customId = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("custom_voice_id_input"),
-                        label = { Text("Voice ID") },
-                        placeholder = { Text("e.g. EXAVITQu4vr4xnSDxMaL") },
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = customName,
-                        onValueChange = { customName = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(if (isBn) "ভয়েসের নাম (ঐচ্ছিক)" else "Voice Name (optional)") },
-                        placeholder = { Text(if (isBn) "যেমন: মিষ্টি ফিমেল কণ্ঠ" else "e.g. Sweet Bengali Female") },
-                        singleLine = true
-                    )
-                    FilledTonalButton(
-                        onClick = {
-                            if (customId.isNotBlank()) {
-                                onAddCustomElevenLabsVoice(customId, customName)
-                                customId = ""
-                                customName = ""
-                            }
-                        },
-                        enabled = customId.isNotBlank(),
-                        modifier = Modifier
-                            .align(Alignment.End)
-                            .testTag("save_custom_voice_button")
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (isBn) "ভয়েস যোগ করুন" else "Add Voice")
-                    }
-                }
-            }
-        }
-
-        Text(
-            text = if (isBn) "কথা বলার গতি (Speed): ${"%.2fx".format(settings.voiceSpeed)}"
-            else "Speech Speed: ${"%.2fx".format(settings.voiceSpeed)}",
-            style = MaterialTheme.typography.labelLarge
-        )
-        Slider(
-            value = settings.voiceSpeed,
-            onValueChange = onChangeVoiceSpeed,
-            valueRange = 0.7f..1.5f
-        )
-
-        if (settings.voiceProvider == VoiceProviderType.ELEVENLABS) {
-            Text(
-                text = "Stability: ${"%.2f".format(settings.elevenLabsStability)}",
-                style = MaterialTheme.typography.labelLarge
-            )
-            Slider(
-                value = settings.elevenLabsStability,
-                onValueChange = onChangeStability,
-                valueRange = 0f..1f
-            )
-            Text(
-                text = "Style: ${"%.2f".format(settings.elevenLabsStyle)}",
-                style = MaterialTheme.typography.labelLarge
-            )
-            Slider(
-                value = settings.elevenLabsStyle,
-                onValueChange = onChangeStyle,
-                valueRange = 0f..1f
-            )
-        }
+    var nameInput by rememberSaveable(settings.assistantName) { mutableStateOf(settings.assistantName) }
+    var showCustomEditor by remember(settings.personalityPreset) {
+        mutableStateOf(settings.personalityPreset == PersonalityPreset.CUSTOM)
     }
-
-    if (showNameDialog) {
-        var nameInput by rememberSaveable(settings.assistantName) { mutableStateOf(settings.assistantName) }
-        AlertDialog(
-            onDismissRequest = { showNameDialog = false },
-            title = { Text(if (isBn) "সহকারীর নাম পরিবর্তন" else "Assistant Name") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = if (isBn) {
-                            "আপনি চাইলে পছন্দের নাম দিতে পারেন (ডিফল্ট: Shaila)।"
-                        } else {
-                            "Customize what your assistant calls herself (Default: Shaila)."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = nameInput,
-                        onValueChange = { nameInput = it },
-                        singleLine = true,
-                        label = { Text(if (isBn) "নাম" else "Name") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("assistant_name_input")
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onSetAssistantName(nameInput)
-                        showNameDialog = false
-                    }
-                ) {
-                    Text(if (isBn) "সেভ করুন" else "Save")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showNameDialog = false }) {
-                    Text(if (isBn) "বাতিল" else "Cancel")
-                }
-            }
-        )
-    }
-
-    if (showPersonalityDialog) {
-        PersonalityPickerDialog(
-            settings = settings,
-            isBn = isBn,
-            onSelectPreset = onSelectPersonality,
-            onSaveCustom = onSaveCustomPersonality,
-            onDismiss = { showPersonalityDialog = false }
-        )
-    }
-}
-
-@Composable
-private fun PersonalityPickerDialog(
-    settings: AppSettings,
-    isBn: Boolean,
-    onSelectPreset: (PersonalityPreset) -> Unit,
-    onSaveCustom: (String, String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val ext = LocalShailaColors.current
-    var showCustomEditor by remember { mutableStateOf(settings.personalityPreset == PersonalityPreset.CUSTOM) }
     var customName by rememberSaveable(settings.customPersonalityName) {
         mutableStateOf(settings.customPersonalityName)
     }
@@ -820,22 +422,75 @@ private fun PersonalityPickerDialog(
         mutableStateOf(settings.customPersonalityPrompt)
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Card 1: Assistant Name & Response Style
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp, contentPadding = 16.dp) {
             Text(
-                text = if (isBn) "ব্যক্তিত্ব বেছে নিন" else "Choose Personality",
+                text = if (isBn) "নাম ও কথা বলার ধরন" else "Name & Conversation Style",
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                OutlinedTextField(
+                    value = nameInput,
+                    onValueChange = { nameInput = it },
+                    singleLine = true,
+                    label = { Text(if (isBn) "সহকারীর নাম" else "Assistant Name") },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("assistant_name_input")
+                )
+                FilledTonalButton(
+                    onClick = { onSetAssistantName(nameInput) },
+                    enabled = nameInput.isNotBlank() && nameInput.trim() != settings.assistantName,
+                    modifier = Modifier.height(52.dp)
+                ) {
+                    Text(if (isBn) "সেভ" else "Save")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = if (isBn) "উত্তরের দৈর্ঘ্য ও ধরন (Response Style)" else "Response Style",
+                style = MaterialTheme.typography.labelLarge,
+                color = AccentVioletSecondary
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ResponseStyle.entries.forEach { style ->
+                    FilterChip(
+                        selected = settings.responseStyle == style,
+                        onClick = { onSelectResponseStyle(style) },
+                        label = { Text(if (isBn) style.titleBn else style.titleEn) }
+                    )
+                }
+            }
+        }
+
+        // Card 2: Inline Personality Picker (zero nested popups!)
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp, contentPadding = 16.dp) {
+            Text(
+                text = if (isBn) "ব্যক্তিত্ব ও মেজাজ (Personality)" else "Personality",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = if (isBn) "শাইলা কোন মেজাজে কথা বলবে সরাসরি নির্বাচন করুন:" else "Choose directly how Shaila speaks with you:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 PersonalityPreset.entries.forEach { preset ->
                     val selected = settings.personalityPreset == preset
                     Surface(
@@ -846,8 +501,8 @@ private fun PersonalityPickerDialog(
                                 if (preset == PersonalityPreset.CUSTOM) {
                                     showCustomEditor = true
                                 } else {
-                                    onSelectPreset(preset)
-                                    onDismiss()
+                                    showCustomEditor = false
+                                    onSelectPersonality(preset)
                                 }
                             }
                             .testTag("personality_${preset.id}"),
@@ -889,11 +544,6 @@ private fun PersonalityPickerDialog(
 
                 if (showCustomEditor) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (isBn) "কাস্টম ব্যক্তিত্ব লিখুন" else "Custom Personality Prompt",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = AccentVioletSecondary
-                    )
                     OutlinedTextField(
                         value = customName,
                         onValueChange = { customName = it },
@@ -920,11 +570,10 @@ private fun PersonalityPickerDialog(
                     )
                     Button(
                         onClick = {
-                            onSaveCustom(
+                            onSaveCustomPersonality(
                                 customName.ifBlank { if (isBn) "কাস্টম মেজাজ" else "Custom" },
                                 customPrompt
                             )
-                            onDismiss()
                         },
                         enabled = customPrompt.isNotBlank(),
                         modifier = Modifier.fillMaxWidth()
@@ -935,63 +584,255 @@ private fun PersonalityPickerDialog(
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(if (isBn) "বন্ধ" else "Close")
+        }
+
+        // Card 3: Gemini Live Natural Voice
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp, contentPadding = 16.dp) {
+            Text(
+                text = if (isBn) "Gemini Live কণ্ঠ (লাইভ কল ও আসল নারী কণ্ঠ)" else "Gemini Live Voice (Natural Female)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = if (isBn) {
+                    "লাইভ কল ও হোম-চ্যাটের উত্তরে এই স্বাভাবিক নারী কণ্ঠে কথা বলবে (Gemini Key থাকলেই চলবে)।"
+                } else {
+                    "Used for Live Calls and natural replies whenever a Gemini API key is saved."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            GeminiLiveVoice.entries.forEach { gVoice ->
+                val isSelected = settings.geminiLiveVoice == gVoice
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable { onSelectGeminiVoice(gVoice) }
+                        .testTag("gemini_voice_${gVoice.voiceName}")
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = isSelected,
+                        onClick = { onSelectGeminiVoice(gVoice) }
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isBn) gVoice.titleBn else gVoice.titleEn,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (isBn) gVoice.descriptionBn else gVoice.descriptionEn,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
-    )
-}
 
-@Composable
-private fun PanelRowButton(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val ext = LocalShailaColors.current
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        color = ext.glassFill,
-        border = BorderStroke(1.dp, ext.glassBorder)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = AccentVioletSecondary,
-                modifier = Modifier.size(20.dp)
+        // Card 4: Chat & Read-Aloud TTS Voice Provider & Speed
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp, contentPadding = 16.dp) {
+            Text(
+                text = if (isBn) "চ্যাট ও রিড-আলাউড ভয়েস (TTS)" else "Chat & Read-Aloud Voice (TTS)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
+            Spacer(modifier = Modifier.height(8.dp))
+            VoiceProviderType.entries.forEach { provider ->
+                val selected = settings.voiceProvider == provider
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.medium)
+                        .clickable { onSelectVoiceProvider(provider) }
+                        .padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = selected,
+                        onClick = { onSelectVoiceProvider(provider) }
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isBn) provider.titleBn else provider.titleEn,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = provider.subtitleBn,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (isBn) "ভয়েস তালিকা (${settings.voiceProvider.titleEn})" else "Voices (${settings.voiceProvider.titleEn})",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.secondary
+            )
+            if (voicePreviewStatus != null) {
                 Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = subtitle,
+                    text = voicePreviewStatus,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+
+            val voices = if (settings.voiceProvider == VoiceProviderType.ELEVENLABS) {
+                settings.allElevenLabsVoices()
+            } else {
+                ShailaCatalog.voicesFor(settings.voiceProvider)
+            }
+            val selectedVoiceId = settings.currentVoiceId()
+            voices.forEach { voice ->
+                val isSelected = voice.voiceId == selectedVoiceId
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable { onSelectVoice(settings.voiceProvider, voice.voiceId) }
+                        .padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = isSelected,
+                        onClick = { onSelectVoice(settings.voiceProvider, voice.voiceId) }
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (voice.isCustom) "${voice.name} ★" else voice.name,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (isBn) voice.descriptionBn else voice.descriptionEn,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    FilledTonalButton(
+                        onClick = { onPreviewVoice(settings.voiceProvider, voice.voiceId) },
+                        modifier = Modifier.testTag("preview_voice_${voice.voiceId}")
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (isBn) "শুনে দেখো" else "Preview")
+                    }
+                }
+            }
+
+            if (settings.voiceProvider == VoiceProviderType.ELEVENLABS) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onLoadMyElevenLabsVoices,
+                    enabled = !isLoadingElevenVoices,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("load_elevenlabs_voices_button")
+                ) {
+                    if (isLoadingElevenVoices) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                    } else {
+                        Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(if (isBn) "আমার ElevenLabs ভয়েস লোড করুন" else "Load My ElevenLabs Voices")
+                }
+
+                var customId by rememberSaveable { mutableStateOf("") }
+                var customName by rememberSaveable { mutableStateOf("") }
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = ext.glassFill,
+                    border = BorderStroke(1.dp, ext.glassBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = if (isBn) "যেকোনো সুন্দর ফিমেল Voice ID বসান" else "Paste Any Custom Female Voice ID",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        OutlinedTextField(
+                            value = customId,
+                            onValueChange = { customId = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("custom_voice_id_input"),
+                            label = { Text("Voice ID") },
+                            placeholder = { Text("e.g. EXAVITQu4vr4xnSDxMaL") },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = customName,
+                            onValueChange = { customName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(if (isBn) "ভয়েসের নাম (ঐচ্ছিক)" else "Voice Name (optional)") },
+                            placeholder = { Text(if (isBn) "যেমন: মিষ্টি ফিমেল কণ্ঠ" else "e.g. Sweet Bengali Female") },
+                            singleLine = true
+                        )
+                        FilledTonalButton(
+                            onClick = {
+                                if (customId.isNotBlank()) {
+                                    onAddCustomElevenLabsVoice(customId, customName)
+                                    customId = ""
+                                    customName = ""
+                                }
+                            },
+                            enabled = customId.isNotBlank(),
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .testTag("save_custom_voice_button")
+                        ) {
+                            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(if (isBn) "ভয়েস যোগ করুন" else "Add Voice")
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = if (isBn) "কথা বলার গতি (Speed): ${"%.2fx".format(settings.voiceSpeed)}"
+                else "Speech Speed: ${"%.2fx".format(settings.voiceSpeed)}",
+                style = MaterialTheme.typography.labelLarge
             )
+            Slider(
+                value = settings.voiceSpeed,
+                onValueChange = onChangeVoiceSpeed,
+                valueRange = 0.7f..1.5f
+            )
+
+            if (settings.voiceProvider == VoiceProviderType.ELEVENLABS) {
+                Text(
+                    text = "Stability: ${"%.2f".format(settings.elevenLabsStability)}",
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Slider(
+                    value = settings.elevenLabsStability,
+                    onValueChange = onChangeStability,
+                    valueRange = 0f..1f
+                )
+                Text(
+                    text = "Style: ${"%.2f".format(settings.elevenLabsStyle)}",
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Slider(
+                    value = settings.elevenLabsStyle,
+                    onValueChange = onChangeStyle,
+                    valueRange = 0f..1f
+                )
+            }
         }
     }
 }
@@ -1008,7 +849,7 @@ private fun PanelSwitchRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(

@@ -277,4 +277,28 @@ class ExampleUnitTest {
         assertTrue(prompt.contains("NEVER sound like a robotic AI"))
         assertTrue(prompt.contains("LOYALTY & USER RETENTION"))
     }
+
+    @Test
+    fun `fallback phone command parser detects horizontal scroll, ordinal clicks, button taps, and keyboard typing`() {
+        val scrollLeft = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt("বামে স্ক্রল করো")
+        assertEquals(listOf(com.example.data.device.PhoneAction.Scroll("left")), scrollLeft)
+
+        val scrollRight = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt("scroll right")
+        assertEquals(listOf(com.example.data.device.PhoneAction.Scroll("right")), scrollRight)
+
+        val firstVideo = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt("প্রথম ভিডিওতে ক্লিক করো")
+        assertEquals(listOf(com.example.data.device.PhoneAction.TapText("first")), firstVideo)
+
+        val playSecond = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt("play second video")
+        assertEquals(listOf(com.example.data.device.PhoneAction.TapText("second")), playSecond)
+
+        val tapSearch = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt("সার্চ বাটনে চাপ দাও")
+        assertEquals(listOf(com.example.data.device.PhoneAction.TapText("সার্চ")), tapSearch)
+
+        val kbType = com.example.data.device.PhoneActionParser.inferFallbackActionsFromUserPrompt("কিবোর্ড ওপেন করে আমার সোনার বাংলা লিখে দাও")
+        assertEquals(
+            listOf(com.example.data.device.PhoneAction.TypeText("আমার সোনার বাংলা", append = false, submitAfter = false)),
+            kbType
+        )
+    }
 }

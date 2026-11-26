@@ -412,6 +412,7 @@ fun ShailaApp(viewModel: ShailaViewModel = viewModel()) {
                         micLevel = liveMicLevel,
                         onToggleMute = viewModel::toggleLiveMute,
                         onToggleSpeaker = viewModel::toggleLiveSpeaker,
+                        onInterruptSpeaking = viewModel::interruptLiveSpeaking,
                         onMinimize = { viewModel.setLiveMinimized(true) },
                         onEndCall = viewModel::endLiveCall,
                         onRetry = viewModel::startLiveCall,

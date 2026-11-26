@@ -11,6 +11,7 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.util.Base64
 import com.example.data.model.AppLanguage
@@ -90,6 +91,7 @@ class GeminiLiveManager(
     private var webSocket: WebSocket? = null
     private var audioRecord: AudioRecord? = null
     private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
     private var audioTrack: AudioTrack? = null
     private var micStreamJob: Job? = null
     private var silenceDecayJob: Job? = null
@@ -103,6 +105,8 @@ class GeminiLiveManager(
     private val audioWriteLock = Any()
     @Volatile
     private var lastAudioWriteAtMs = 0L
+    @Volatile
+    private var manualInterruptAtMs = 0L
     @Volatile
     private var setupComplete = false
     @Volatile
@@ -348,10 +352,12 @@ class GeminiLiveManager(
                                         "automaticActivityDetection",
                                         JSONObject().apply {
                                             put("disabled", false)
-                                            put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
+                                            // LOW start sensitivity prevents room hiss, breathing, and tail echoes
+                                            // from triggering phantom assistant turns when nobody is speaking.
+                                            put("startOfSpeechSensitivity", "START_SENSITIVITY_LOW")
                                             put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
-                                            put("prefixPaddingMs", 60)
-                                            put("silenceDurationMs", 260)
+                                            put("prefixPaddingMs", 80)
+                                            put("silenceDurationMs", 380)
                                         }
                                     )
                                 )
@@ -606,8 +612,13 @@ class GeminiLiveManager(
             assistantBuffer.clear()
             if (_sessionState.value.status == LiveCallStatus.SPEAKING) {
                 scope.launch {
-                    delay(260)
-                    if (!manualStopRequested && System.currentTimeMillis() - lastAudioWriteAtMs > 220L) {
+                    // Wait until AudioTrack playback finishes and room echo fades before switching to LISTENING
+                    while (isActive && !manualStopRequested) {
+                        val quietFor = System.currentTimeMillis() - lastAudioWriteAtMs
+                        if (quietFor >= 680L) break
+                        delay((700L - quietFor).coerceIn(120L, 450L))
+                    }
+                    if (!manualStopRequested && System.currentTimeMillis() - lastAudioWriteAtMs >= 650L) {
                         _speakingLevel.value = 0f
                         _sessionState.value = _sessionState.value.copy(
                             status = LiveCallStatus.LISTENING,
@@ -821,21 +832,77 @@ class GeminiLiveManager(
                     AcousticEchoCanceler.create(recorder.audioSessionId)?.apply { enabled = true }
                 }.getOrNull()
             }
+            if (NoiseSuppressor.isAvailable()) {
+                noiseSuppressor = runCatching {
+                    NoiseSuppressor.create(recorder.audioSessionId)?.apply { enabled = true }
+                }.getOrNull()
+            }
 
             val buffer = ByteArray(640) // 20ms low-latency chunks at 16kHz 16-bit mono
+            val silenceBuffer = ByteArray(640)
+            var speechHangoverUntilMs = 0L
+            var bargeInConsecutiveFrames = 0
             runCatching { recorder.startRecording() }
 
             while (isActive && !manualStopRequested) {
                 val read = runCatching { recorder.read(buffer, 0, buffer.size) }.getOrDefault(-1)
                 if (read > 0) {
-                    if (_sessionState.value.isMuted) {
+                    val state = _sessionState.value
+                    if (state.isMuted) {
                         _micLevel.value = 0f
+                        bargeInConsecutiveFrames = 0
                         continue
                     }
-                    val rms = PcmAudioProcessor.computePcm16RmsNormalized(buffer, read)
-                    _micLevel.value = rms
 
-                    val b64 = Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP)
+                    val now = System.currentTimeMillis()
+                    val rms = PcmAudioProcessor.computePcm16RmsNormalized(buffer, read)
+                    val msSinceSpeakerAudio = now - lastAudioWriteAtMs
+                    val isEchoWindow = state.status == LiveCallStatus.SPEAKING || msSinceSpeakerAudio < 750L
+                    val inManualInterruptCooldown = now - manualInterruptAtMs < 220L
+
+                    val shouldTransmitMic: Boolean = when {
+                        inManualInterruptCooldown -> false
+                        isEchoWindow -> {
+                            // Anti-loop echo gate: suppress speaker playback echo while still allowing
+                            // genuine sustained close-mic barge-in from the user.
+                            val bargeThreshold = if (state.isSpeakerOn) {
+                                maxOf(0.58f, _speakingLevel.value * 0.90f + 0.32f)
+                            } else {
+                                0.16f
+                            }
+                            val neededFrames = if (state.isSpeakerOn) 8 else 3 // 160ms speaker / 60ms earpiece
+                            if (rms >= bargeThreshold) {
+                                bargeInConsecutiveFrames++
+                            } else {
+                                bargeInConsecutiveFrames = 0
+                            }
+                            if (bargeInConsecutiveFrames >= neededFrames) {
+                                // User is genuinely interrupting mid-speech: flush speaker audio immediately
+                                flushAudioTrack()
+                                _speakingLevel.value = 0f
+                                _sessionState.value = state.copy(status = LiveCallStatus.LISTENING)
+                                speechHangoverUntilMs = now + 450L
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        else -> {
+                            bargeInConsecutiveFrames = 0
+                            // Ambient noise gate: ignore static room noise when nobody is talking
+                            if (rms >= 0.048f) {
+                                speechHangoverUntilMs = now + 350L
+                                true
+                            } else {
+                                now < speechHangoverUntilMs
+                            }
+                        }
+                    }
+
+                    _micLevel.value = if (shouldTransmitMic) rms else 0f
+
+                    val payloadBytes = if (shouldTransmitMic) buffer else silenceBuffer
+                    val b64 = Base64.encodeToString(payloadBytes, 0, read, Base64.NO_WRAP)
                     val msg = JSONObject().put(
                         "realtimeInput",
                         JSONObject().put(
@@ -850,6 +917,20 @@ class GeminiLiveManager(
                     webSocket?.send(msg)
                 }
             }
+        }
+    }
+
+    fun interruptAssistantPlayback() {
+        manualInterruptAtMs = System.currentTimeMillis()
+        lastAudioWriteAtMs = 0L
+        flushAudioTrack()
+        _speakingLevel.value = 0f
+        val current = _sessionState.value
+        if (current.isActive) {
+            _sessionState.value = current.copy(
+                status = LiveCallStatus.LISTENING,
+                liveCaption = ""
+            )
         }
     }
 
@@ -893,6 +974,8 @@ class GeminiLiveManager(
 
         runCatching { echoCanceler?.release() }
         echoCanceler = null
+        runCatching { noiseSuppressor?.release() }
+        noiseSuppressor = null
 
         runCatching {
             audioRecord?.let {

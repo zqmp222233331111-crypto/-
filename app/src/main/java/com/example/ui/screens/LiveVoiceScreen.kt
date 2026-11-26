@@ -83,6 +83,7 @@ fun LiveVoiceScreen(
     micLevel: Float,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit = {},
+    onInterruptSpeaking: () -> Unit = {},
     onMinimize: () -> Unit,
     onEndCall: () -> Unit,
     onRetry: () -> Unit,
@@ -179,6 +180,11 @@ fun LiveVoiceScreen(
             }
 
             // Center Living Character or Glowing Orb with real-time Lip-Sync & Gesture Motion
+            val centerTapAction: () -> Unit = if (liveState.status == LiveCallStatus.SPEAKING) {
+                onInterruptSpeaking
+            } else {
+                onToggleMute
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -196,7 +202,7 @@ fun LiveVoiceScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(335.dp),
-                        onClick = onToggleMute
+                        onClick = centerTapAction
                     )
                 } else {
                     AnimatedVoiceOrb(
@@ -205,7 +211,7 @@ fun LiveVoiceScreen(
                         speakingLevel = speakingLevel,
                         avatarRegion = avatarRegion,
                         orbSize = 246.dp,
-                        onClick = onToggleMute
+                        onClick = centerTapAction
                     )
                 }
 
@@ -226,7 +232,7 @@ fun LiveVoiceScreen(
                         } else {
                             if (isBn) "$bnName শুনছে..." else "${settings.assistantName} is listening..."
                         }
-                        LiveCallStatus.SPEAKING -> if (isBn) "$bnName কথা বলছে..." else "${settings.assistantName} is speaking..."
+                        LiveCallStatus.SPEAKING -> if (isBn) "$bnName কথা বলছে... (থামাতে ট্যাপ করুন)" else "${settings.assistantName} is speaking... (tap to interrupt)"
                         LiveCallStatus.ERROR -> if (isBn) "সংযোগে সমস্যা হয়েছে" else "Connection issue"
                         LiveCallStatus.IDLE -> if (isBn) "কল প্রস্তুত" else "Ready"
                     },

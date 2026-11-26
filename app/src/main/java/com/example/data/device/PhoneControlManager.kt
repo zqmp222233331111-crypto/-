@@ -111,7 +111,17 @@ object PhoneActionParser {
             return listOf(PhoneAction.SystemNav("notifications"))
         }
 
-        // 4. Scroll
+        // 4. Scroll (Vertical + Horizontal)
+        if (lower.contains("বামে স্ক্রল") || lower.contains("বাম দিকে স্ক্রল") || lower.contains("বামে যাও") ||
+            lower.contains("scroll left") || lower.contains("swipe left")
+        ) {
+            return listOf(PhoneAction.Scroll("left"))
+        }
+        if (lower.contains("ডানে স্ক্রল") || lower.contains("ডান দিকে স্ক্রল") || lower.contains("ডানে যাও") ||
+            lower.contains("scroll right") || lower.contains("swipe right")
+        ) {
+            return listOf(PhoneAction.Scroll("right"))
+        }
         if (lower.contains("নিচে স্ক্রল") || lower.contains("নিচের দিকে স্ক্রল") || lower.contains("scroll down")) {
             return listOf(PhoneAction.Scroll("down"))
         }
@@ -161,7 +171,7 @@ object PhoneActionParser {
                 }
             }
 
-            if (matchedApp == null) {
+            if (matchedApp == null && !lower.contains("কিবোর্ড") && !lower.contains("keyboard") && !lower.contains("ভিডিও")) {
                 val enOpen = Regex("""open\s+([a-zA-Z0-9 ._-]{2,24})""", RegexOption.IGNORE_CASE).find(text)
                 val bnOpen = Regex("""([^\s,।?!]{2,24})\s+(?:অ্যাপ\s+)?(?:খোলো|খোল|খুলুন|খুলে\s+দাও|ওপেন\s+করো|চালু\s+করো)""").find(text)
                 matchedApp = (enOpen?.groupValues?.getOrNull(1) ?: bnOpen?.groupValues?.getOrNull(1))?.trim()
@@ -190,21 +200,57 @@ object PhoneActionParser {
             }
         }
 
-        // 6. Direct typing instruction without opening a new app
+        // 6. Ordinal / video item clicks or button tap commands
+        val ordinalClickTarget = extractOrdinalClickTarget(lower)
+        if (ordinalClickTarget != null) {
+            return listOf(PhoneAction.TapText(ordinalClickTarget))
+        }
+
+        val explicitTapTarget = extractExplicitTapTarget(text)
+        if (!explicitTapTarget.isNullOrBlank()) {
+            return listOf(PhoneAction.TapText(explicitTapTarget))
+        }
+
+        // 7. Direct typing instruction (including "কিবোর্ড ওপেন করে ... লেখো")
         val hasTypeVerb = listOf("টাইপ কর", "লিখে দাও", "লেখো", "লিখো", "type ", "write ")
             .any { lower.contains(it) }
         if (hasTypeVerb && !lower.contains("কবিতা") && !lower.contains("গল্প") && !lower.contains("রচনা") && !lower.contains("ক্যাপশন")) {
             val typed = extractDirectTypeText(text)
             if (!typed.isNullOrBlank()) {
-                actions.add(PhoneAction.TypeText(typed))
-                if (lower.contains("পাঠিয়ে দাও") || lower.contains("পাঠাও") || lower.contains("সেন্ড") || lower.contains("সার্চ")) {
-                    actions.add(PhoneAction.Submit)
-                }
+                val shouldSubmit = lower.contains("পাঠিয়ে দাও") || lower.contains("পাঠাও") || lower.contains("সেন্ড") || lower.contains("সার্চ")
+                actions.add(PhoneAction.TypeText(typed, submitAfter = shouldSubmit))
                 return actions
             }
         }
 
         return emptyList()
+    }
+
+    private fun extractOrdinalClickTarget(lower: String): String? {
+        val hasClickIntent = listOf("ক্লিক", "ট্যাপ", "চালাও", "খোলো", "চাপ", "click", "tap", "play", "open")
+            .any { lower.contains(it) }
+        if (!hasClickIntent) return null
+        return when {
+            lower.contains("প্রথম") || lower.contains("১ম") || lower.contains("1st") || lower.contains("first") -> "first"
+            lower.contains("দ্বিতীয়") || lower.contains("দ্বিতীয়") || lower.contains("২য়") || lower.contains("2nd") || lower.contains("second") -> "second"
+            lower.contains("তৃতীয়") || lower.contains("তৃতীয়") || lower.contains("৩য়") || lower.contains("3rd") || lower.contains("third") -> "third"
+            lower.contains("চতুর্থ") || lower.contains("৪র্থ") || lower.contains("4th") || lower.contains("fourth") -> "fourth"
+            else -> null
+        }
+    }
+
+    private fun extractExplicitTapTarget(text: String): String? {
+        val patterns = listOf(
+            Regex("""(.+?)\s+(?:বাটনে|এ|তে|অপশনে)\s*(?:ক্লিক|ট্যাপ|চাপ\s+দাও|ক্লিক\s+করো|ট্যাপ\s+করো)"""),
+            Regex("""(?:ক্লিক\s+করো|ট্যাপ\s+করো|চাপ\s+দাও|click|tap|press)\s+(?:on\s+)?["']?(.+?)["']?$""", RegexOption.IGNORE_CASE)
+        )
+        for (p in patterns) {
+            val found = p.find(text)?.groupValues?.getOrNull(1)?.trim()
+            if (!found.isNullOrBlank() && found.length in 2..40) {
+                return found.removeSuffix("বাটন").removeSuffix("button").trim()
+            }
+        }
+        return null
     }
 
     private fun extractTypedOrSearchQuery(tail: String): String? {
@@ -223,13 +269,20 @@ object PhoneActionParser {
 
     private fun extractDirectTypeText(text: String): String? {
         val patterns = listOf(
+            Regex("""(?:কিবোর্ড(?:ে|টা)?\s*(?:খুলে|ওপেন\s*করে|চালু\s*করে)?\s*)(.+?)\s*(?:টাইপ\s*করো|টাইপ\s*কর|লিখে\s*দাও|লেখো|লিখো)"""),
+            Regex("""(?:এখানে|বক্সে|সার্চ\s*বক্সে)\s+(.+?)\s*(?:টাইপ\s*করো|টাইপ\s*কর|লিখে\s*দাও|লেখো|লিখো)"""),
             Regex("""(?:টাইপ করো|টাইপ কর|লিখে দাও|লেখো|লিখো)\s*[:\-–]?\s*["']?(.+?)["']?$"""),
-            Regex("""(?:type|write)\s+["']?(.+?)["']?$""", RegexOption.IGNORE_CASE)
+            Regex("""(?:type|write)\s+["']?(.+?)["']?(?:\s+on\s+keyboard|\s+in\s+keyboard)?$""", RegexOption.IGNORE_CASE)
         )
         for (p in patterns) {
             val found = p.find(text)?.groupValues?.getOrNull(1)?.trim()
             if (!found.isNullOrBlank()) {
-                return found.removeSuffix("পাঠাও").removeSuffix("সেন্ড করো").removeSuffix("সার্চ করো").trim()
+                return found
+                    .removeSuffix("পাঠাও")
+                    .removeSuffix("পাঠিয়ে দাও")
+                    .removeSuffix("সেন্ড করো")
+                    .removeSuffix("সার্চ করো")
+                    .trim()
             }
         }
         return null
@@ -589,6 +642,7 @@ class PhoneControlManager(context: Context) {
                 val res = withContext(Dispatchers.Main) { openApp(appName) }
                 if (res.success) {
                     waitForForegroundChange(prev, maxWaitMs = 1800L)
+                    resultObj.put("minimize_call", true)
                 }
                 resultObj.put("success", res.success)
                 resultObj.put("message", res.detail)
@@ -598,6 +652,7 @@ class PhoneControlManager(context: Context) {
                 val res = withContext(Dispatchers.Main) { openUrl(url) }
                 if (res.success) {
                     delay(900)
+                    resultObj.put("minimize_call", true)
                 }
                 resultObj.put("success", res.success)
                 resultObj.put("message", res.detail)
@@ -605,6 +660,9 @@ class PhoneControlManager(context: Context) {
             "dial_number" -> {
                 val phone = args.optString("phone_number")
                 val res = withContext(Dispatchers.Main) { dialNumber(phone) }
+                if (res.success) {
+                    resultObj.put("minimize_call", true)
+                }
                 resultObj.put("success", res.success)
                 resultObj.put("message", res.detail)
             }
@@ -632,7 +690,9 @@ class PhoneControlManager(context: Context) {
                     resultObj.put("message", "Accessibility service is not enabled yet. Ask the user to enable Shaila Phone Control in Accessibility Settings.")
                 } else {
                     val res = service.typeTextSmart(text = text, append = false, submitAfter = submit)
+                    delay(200)
                     resultObj.put("success", res.success)
+                    resultObj.put("typed_text", text)
                     resultObj.put("message", res.detail)
                 }
             }

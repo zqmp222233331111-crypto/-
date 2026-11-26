@@ -238,9 +238,33 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
     private var fallbackLiveJob: Job? = null
     private var fallbackSpeechDeferred: CompletableDeferred<String?>? = null
     private var pendingGalleryVoiceTarget: GalleryMediaItem? = null
+    private var lastSpokenReplyNorm: String = ""
+    private var lastSpokenEndedAtMs: Long = 0L
 
     init {
         observeSpeechEvents()
+    }
+
+    private fun normalizeForEchoCheck(text: String): String {
+        return text.lowercase()
+            .replace(Regex("""[^\p{L}\p{N}\s]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
+    private fun isProbableSelfEcho(transcript: String): Boolean {
+        val elapsed = System.currentTimeMillis() - lastSpokenEndedAtMs
+        if (elapsed > 1900L || lastSpokenReplyNorm.isBlank()) return false
+        val normTranscript = normalizeForEchoCheck(transcript)
+        if (normTranscript.length < 3) return false
+        if (lastSpokenReplyNorm.contains(normTranscript) && normTranscript.length >= 6) {
+            return true
+        }
+        val spokenTokens = lastSpokenReplyNorm.split(' ').filter { it.length >= 2 }.toSet()
+        val heardTokens = normTranscript.split(' ').filter { it.length >= 2 }
+        if (spokenTokens.isEmpty() || heardTokens.isEmpty()) return false
+        val matched = heardTokens.count { it in spokenTokens }
+        return matched.toFloat() / heardTokens.size.toFloat() >= 0.65f
     }
 
     private fun observeSpeechEvents() {
@@ -267,6 +291,19 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                     is SpeechEvent.FinalResult -> {
                         _partialTranscript.value = ""
                         speechManager.resetToIdle()
+                        if (isProbableSelfEcho(event.text)) {
+                            val liveDeferred = fallbackSpeechDeferred
+                            if (liveDeferred != null && !liveDeferred.isCompleted) {
+                                fallbackSpeechDeferred = null
+                                liveDeferred.complete(null)
+                            } else if (settings.value.continuousConversation && _hasMicPermission.value) {
+                                viewModelScope.launch {
+                                    delay(500)
+                                    startVoiceListening(pendingGalleryVoiceTarget)
+                                }
+                            }
+                            return@collectLatest
+                        }
                         val liveDeferred = fallbackSpeechDeferred
                         if (liveDeferred != null && !liveDeferred.isCompleted) {
                             fallbackSpeechDeferred = null
@@ -396,6 +433,11 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                         if (result.optBoolean("needs_accessibility", false)) {
                             _needsAccessibilityDialog.value = true
                         }
+                        if (result.optBoolean("minimize_call", false)) {
+                            viewModelScope.launch {
+                                setLiveMinimized(true)
+                            }
+                        }
                         result
                     }
                 )
@@ -479,6 +521,8 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                     liveCaption = replyText.take(110)
                 )
                 val speakOutcome = repository.speakReply(replyText)
+                lastSpokenReplyNorm = normalizeForEchoCheck(replyText)
+                lastSpokenEndedAtMs = System.currentTimeMillis()
                 if (!speakOutcome.succeeded) {
                     _fallbackLiveState.value = _fallbackLiveState.value.copy(
                         status = LiveCallStatus.ERROR,
@@ -490,9 +534,13 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
                     )
                     break
                 }
-                delay(220)
+                delay(650)
             }
         }
+    }
+
+    fun interruptLiveSpeaking() {
+        geminiLiveManager.interruptAssistantPlayback()
     }
 
     fun toggleLiveMute() {
@@ -628,6 +676,8 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
         voiceJob = viewModelScope.launch {
             _orbState.value = OrbState.SPEAKING
             val outcome = repository.speakReply(text)
+            lastSpokenReplyNorm = normalizeForEchoCheck(text)
+            lastSpokenEndedAtMs = System.currentTimeMillis()
             if (outcome.succeeded) {
                 _activeVoiceSource.value = outcome.usedProviderLabel
             } else {
@@ -644,7 +694,7 @@ class ShailaViewModel(application: Application) : AndroidViewModel(application) 
             val shouldListen = ((allowContinuousNext && settings.value.continuousConversation) || listenAfterComplete) &&
                 _hasMicPermission.value && apiKeys.value.hasAnyChatBrainKey()
             if (shouldListen) {
-                delay(350)
+                delay(650)
                 startVoiceListening()
             }
         }
